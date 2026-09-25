@@ -1,0 +1,14 @@
+[project]
+name = "input-bridge"
+version = "0.1.0"
+description = "Host-side layers and automation for a programmable HID macropad"
+requires-python = ">=3.11"
+dependencies = [
+    "hidapi>=0.14.0",
+    "pyside6>=6.11.2",
+]
+
+[project.scripts]
+inspect-macropad = "inspect_macropad:main"
+observe-raw-input = "observe_raw_input:main"
+inspect-protocol = "inspect_protocol:main"
