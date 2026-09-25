@@ -29,7 +29,7 @@ Windows PowerShell:
 
 ```powershell
 uv sync
-uv run python .\inspect_macropad.py
+uv run inspect-macropad
 ```
 
 The project uses a local virtual environment and does not require global
@@ -43,14 +43,14 @@ uv sync
 ## Observe events
 
 ```powershell
-uv run python .\observe_raw_input.py "manual-test" --seconds 5
+uv run observe-raw-input "manual-test" --seconds 5
 ```
 
 The default is dry-run mode. To execute the currently configured Spotify
 action for `R1C1`:
 
 ```powershell
-uv run python .\observe_raw_input.py "spotify-test" --seconds 5 --execute-actions
+uv run observe-raw-input "spotify-test" --seconds 5 --execute-actions
 ```
 
 ## Safety
@@ -66,15 +66,16 @@ profiles, plugins, and arbitrary command definitions as executable code.
 ## Project layout
 
 ```text
-inspect_macropad.py       Read-only HID enumeration and descriptors
-observe_raw_input.py      Windows Raw Input observer
-event_normalizer.py       HID sequence to logical-control conversion
-protocol951.py             Offline/report helpers for the tested device
-read_*.py                  Read-only device inspection helpers
-write_*.py                 Persistent device mapping writers
-bindings.py                Dry-run logical bindings
-actions.py                 Host actions
-neutral_mapping.py         Proposed 25-control mapping
+src/input_bridge/         Python package
+  inspect_macropad.py     Read-only HID enumeration and descriptors
+  observe_raw_input.py    Windows Raw Input observer
+  event_normalizer.py     HID sequence to logical-control conversion
+  protocol951.py          Offline/report helpers for the tested device
+  read_*.py               Read-only device inspection helpers
+  write_*.py              Persistent device mapping writers
+  bindings.py             Dry-run logical bindings
+  actions.py              Host actions
+  neutral_mapping.py      Proposed 25-control mapping
 ```
 
 ## Scope

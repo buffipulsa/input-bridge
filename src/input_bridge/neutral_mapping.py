@@ -6,7 +6,7 @@ the device and does not claim that modifier encoding has been validated yet.
 
 from __future__ import annotations
 
-from protocol951 import build_set_key_info_report, describe_report
+from .protocol951 import build_set_key_info_report, describe_report
 
 
 GRID = [f"R{row}C{col}" for row in range(1, 5) for col in range(1, 5)]

@@ -1,6 +1,6 @@
 """Print one offline MCU-951 key-mapping report for review."""
 
-from protocol951 import build_set_key_info_report, describe_report
+from .protocol951 import build_set_key_info_report, describe_report
 
 
 def main() -> None:

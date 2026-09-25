@@ -13,9 +13,9 @@ import struct
 import sys
 from ctypes import wintypes
 
-from bindings import DRY_RUN_BINDINGS, LOGICAL_DRY_RUN_BINDINGS
-from actions import execute_action
-from event_normalizer import MacropadEventNormalizer
+from .bindings import DRY_RUN_BINDINGS, LOGICAL_DRY_RUN_BINDINGS
+from .actions import execute_action
+from .event_normalizer import MacropadEventNormalizer
 
 
 VID_PID = "VID_0816&PID_2475"

@@ -1,10 +1,10 @@
-"""Write the approved neutral mapping for the three encoder actions."""
+"""Write the approved neutral mapping for the 4x4 button grid only."""
 
 from __future__ import annotations
 
 import hid
 
-from protocol951 import build_set_key_info_report
+from .protocol951 import build_set_key_info_report
 
 
 VID = 0x0816
@@ -25,34 +25,40 @@ def find_vendor_path() -> str:
     return matches[0]["path"]
 
 
+def grid_entry(logical_index: int) -> tuple[str, int, int, int]:
+    row, column = divmod(logical_index, 4)
+    control = f"R{row + 1}C{column + 1}"
+    storage_index = 4 * column + (3 - row)
+    modifiers = 0x07 if row == 3 else 0
+    keycode = 0x68 + logical_index if logical_index < 12 else 0x68 + (logical_index - 12)
+    return control, storage_index, modifiers, keycode
+
+
 def main() -> None:
     path = find_vendor_path()
     device = hid.device()
     try:
         device.open_path(path)
-        for action_index in range(9):
-            storage_index = 16 + action_index
-            knob = action_index // 3 + 1
-            action = ("PRESS", "CCW", "CW")[action_index % 3]
-            keycode = 0x68 + action_index  # F13 through F21
+        for logical_index in range(16):
+            control, storage_index, modifiers, keycode = grid_entry(logical_index)
             report = build_set_key_info_report(
                 storage_index,
                 key_type=32,
-                code1=0x06,  # Left Alt + Left Shift
+                code1=modifiers,
                 code2=keycode,
                 code3=0,
             )
             written = device.write(report)
             if written != len(report):
-                raise RuntimeError(f"short write for K{knob}-{action}: {written}/65")
+                raise RuntimeError(f"short write for {control}: {written}/65")
             response = device.read(64, timeout_ms=1000)
             if len(response) != 64:
                 raise RuntimeError(
-                    f"missing response for K{knob}-{action}: {len(response)}/64 bytes"
+                    f"missing response for {control}: {len(response)}/64 bytes"
                 )
             print(
-                f"K{knob}-{action}: storage_index={storage_index} "
-                f"modifiers=0x06 keycode=0x{keycode:02X} "
+                f"{control}: storage_index={storage_index} "
+                f"modifiers=0x{modifiers:02X} keycode=0x{keycode:02X} "
                 f"wrote={written} response={bytes(response[:4]).hex(' ')}"
             )
     finally:
