@@ -19,6 +19,9 @@ class LayerBackend(Protocol):
     def add_child(self, parent: Layer, name: str) -> Layer:
         """Create and return a child layer."""
 
+    def replace_roots(self, roots: list[Layer]) -> None:
+        """Replace the top-level layers."""
+
 
 class LayerService:
     """Coordinate layer navigation without depending on a UI toolkit."""
@@ -73,3 +76,10 @@ class LayerService:
         """Set the active layer without knowing how the UI represents it."""
 
         self.active_layer = layer
+
+    def replace_roots(self, roots: list[Layer]) -> None:
+        """Replace the layer tree and reset navigation state."""
+
+        self.backend.replace_roots(roots)
+        self.navigation_stack = []
+        self.active_layer = None

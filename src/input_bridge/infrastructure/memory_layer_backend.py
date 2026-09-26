@@ -25,3 +25,8 @@ class InMemoryLayerBackend:
         """Create and return a child layer."""
 
         return parent.add_child(name)
+
+    def replace_roots(self, roots: list[Layer]) -> None:
+        """Replace the in-memory root layers."""
+
+        self.layer_tree.roots = roots

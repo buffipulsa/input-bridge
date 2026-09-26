@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 
 from ..application.actions import execute_action, execute_profile_action
 from ..application.layer_service import LayerService
-from ..domain.layers import Layer
+from ..domain.layers import Layer, LayerTree
 from ..domain.profiles import (
     BindingDefinition,
     ProfileDocument,
@@ -566,6 +566,19 @@ class LayerEditor(QMainWindow):
                 )
         self.profile.bindings = bindings
 
+    def sync_profile_layers(self) -> None:
+        """Copy the current layer tree into the profile model."""
+
+        self.profile.layers = [
+            layer.to_dict() for layer in self.layer_service.backend.roots()
+        ]
+
+    def restore_profile_layers(self) -> None:
+        """Restore the profile layer tree into the layer service."""
+
+        roots = LayerTree.from_list(self.profile.layers).roots
+        self.layer_service.replace_roots(roots)
+
     def restore_profile_bindings(self) -> None:
         """Copy profile bindings into the UI assignment state."""
 
@@ -606,6 +619,7 @@ class LayerEditor(QMainWindow):
         if self.profile_path is None:
             return
         self.save_current_assignment()
+        self.sync_profile_layers()
         self.sync_profile_bindings()
         try:
             self.profile_path.parent.mkdir(parents=True, exist_ok=True)
@@ -636,6 +650,7 @@ class LayerEditor(QMainWindow):
             QMessageBox.warning(self, "Profile not loaded", str(error))
             return
         self.profile_path = path
+        self.restore_profile_layers()
         self.restore_profile_bindings()
         self.refresh_script_list()
         self.refresh_control_labels()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -86,6 +87,43 @@ class Layer:
         self.children.append(child)
         return child
 
+    def to_dict(self) -> dict[str, Any]:
+        """Return this layer and its descendants as JSON-compatible data."""
+
+        return {
+            "name": self.name,
+            "locked": self.locked,
+            "children": [child.to_dict() for child in self.children],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Layer:
+        """Build a layer hierarchy from JSON-compatible data.
+
+        Raises
+        ------
+        ValueError
+            If the layer data has an invalid name, lock state, or child list.
+        """
+
+        name = data.get("name")
+        locked = data.get("locked", False)
+        children = data.get("children", [])
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("layer name must be a non-empty string")
+        if not isinstance(locked, bool):
+            raise TypeError("layer locked state must be a boolean")
+        if not isinstance(children, list) or not all(
+            isinstance(child, dict) for child in children
+        ):
+            raise ValueError("layer children must be a list of objects")
+
+        return cls(
+            name=name,
+            locked=locked,
+            children=[cls.from_dict(child) for child in children],
+        )
+
 
 @dataclass
 class LayerTree:
@@ -105,3 +143,33 @@ class LayerTree:
         root = Layer(clean_name)
         self.roots.append(root)
         return root
+
+    def to_list(self) -> list[dict[str, Any]]:
+        """Return all root layers as JSON-compatible data."""
+
+        return [root.to_dict() for root in self.roots]
+
+    @classmethod
+    def from_list(cls, data: list[dict[str, Any]]) -> LayerTree:
+        """Build a layer tree from serialized root layers.
+
+        An empty list creates the default locked Global layer. A root named
+        Global is always restored as locked.
+
+        Raises
+        ------
+        ValueError
+            If the serialized root list is invalid.
+        """
+
+        if not isinstance(data, list) or not all(
+            isinstance(item, dict) for item in data
+        ):
+            raise ValueError("layers must be a list of objects")
+        roots = [Layer.from_dict(item) for item in data]
+        if not roots:
+            return cls()
+        for root in roots:
+            if root.name.casefold() == "global":
+                root.locked = True
+        return cls(roots=roots)

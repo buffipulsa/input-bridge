@@ -35,6 +35,25 @@ class LayerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already exists"):
             second.rename("maya", tree.roots)
 
+    def test_nested_tree_round_trips_and_preserves_global_lock(self) -> None:
+        tree = LayerTree()
+        maya = tree.add_root("Maya")
+        modeling = maya.add_child("Modeling")
+        modeling.add_child("Hard Surface")
+
+        serialized = tree.to_list()
+        restored = LayerTree.from_list(serialized)
+
+        self.assertEqual(restored.roots[0].name, "Global")
+        self.assertTrue(restored.roots[0].locked)
+        self.assertEqual(restored.roots[1].children[0].children[0].name, "Hard Surface")
+
+    def test_empty_serialized_tree_uses_default_global_layer(self) -> None:
+        tree = LayerTree.from_list([])
+
+        self.assertEqual([layer.name for layer in tree.roots], ["Global"])
+        self.assertTrue(tree.roots[0].locked)
+
 
 if __name__ == "__main__":
     unittest.main()
