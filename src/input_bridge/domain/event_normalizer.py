@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 VK_F13 = 0x7C
 VK_F24 = 0x87
 KEY_UP_FLAG = 0x0001
@@ -23,13 +22,32 @@ _MODIFIER_BITS = {
 
 
 class MacropadEventNormalizer:
-    """Track modifier state and emit logical IDs on F13-F24 key-downs."""
+    """Convert neutral keyboard sequences into stable logical controls.
+
+    The normalizer tracks modifier key state because Windows Raw Input may
+    deliver modifier events before the associated F13-F24 event. It emits a
+    logical identifier only when a complete configured sequence is recognized.
+    """
 
     def __init__(self) -> None:
         self._modifiers = 0
 
     def feed(self, vkey: int, flags: int) -> str | None:
-        """Consume one Raw Input keyboard event."""
+        """Consume one Raw Input keyboard event.
+
+        Parameters
+        ----------
+        vkey : int
+            Windows virtual-key code from the Raw Input event.
+        flags : int
+            Raw Input keyboard flags. ``KEY_UP_FLAG`` indicates release.
+
+        Returns
+        -------
+        str or None
+            The logical macropad control, or ``None`` when the event is a
+            modifier, release, or unrecognized sequence.
+        """
 
         modifier_bit = _MODIFIER_BITS.get(vkey, 0)
         is_key_up = bool(flags & KEY_UP_FLAG)

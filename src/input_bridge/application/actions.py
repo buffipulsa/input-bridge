@@ -10,6 +10,16 @@ def execute_action(logical_event: str) -> None:
 
     The first real action is intentionally narrow: R1C1 opens/activates the
     Spotify URI registered by the Spotify Windows app.
+
+    Parameters
+    ----------
+    logical_event : str
+        Stable logical control identifier emitted by the event normalizer.
+
+    Raises
+    ------
+    RuntimeError
+        If the Spotify action is requested on a non-Windows platform.
     """
 
     if logical_event != "R1C1":

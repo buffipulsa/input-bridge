@@ -9,7 +9,6 @@ from __future__ import annotations
 import sys
 import time
 
-
 VID = 0x0816
 PID = 0x2475
 VENDOR_USAGE_PAGE = 0xFF00

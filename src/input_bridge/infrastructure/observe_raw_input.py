@@ -6,17 +6,16 @@ HID handle and does not send USB, output, or feature reports.
 
 from __future__ import annotations
 
-import ctypes
 import argparse
+import ctypes
 import json
 import struct
 import sys
 from ctypes import wintypes
 
-from .bindings import DRY_RUN_BINDINGS, LOGICAL_DRY_RUN_BINDINGS
-from .actions import execute_action
-from .event_normalizer import MacropadEventNormalizer
-
+from ..application.actions import execute_action
+from ..application.bindings import DRY_RUN_BINDINGS, LOGICAL_DRY_RUN_BINDINGS
+from ..domain.event_normalizer import MacropadEventNormalizer
 
 VID_PID = "VID_0816&PID_2475"
 DEFAULT_OBSERVATION_SECONDS = 5

@@ -2,7 +2,7 @@
 name = "input-bridge"
 version = "0.1.0"
 description = "Host-side layers and automation for a programmable HID macropad"
-requires-python = ">=3.11"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "hidapi>=0.14.0",
     "pyside6>=6.11.2",
@@ -15,7 +15,15 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/input_bridge"]
 
+[dependency-groups]
+dev = [
+    "furo>=2025.12.19",
+    "ruff>=0.16.9",
+    "sphinx>=9.0.4",
+]
+
 [project.scripts]
-inspect-macropad = "input_bridge.inspect_macropad:main"
-observe-raw-input = "input_bridge.observe_raw_input:main"
-inspect-protocol = "input_bridge.inspect_protocol:main"
+inspect-macropad = "input_bridge.infrastructure.inspect_macropad:main"
+observe-raw-input = "input_bridge.infrastructure.observe_raw_input:main"
+inspect-protocol = "input_bridge.infrastructure.inspect_protocol:main"
+layer-editor = "input_bridge.ui.layer_editor:main"

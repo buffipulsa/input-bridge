@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import hid
 
-from .protocol951 import build_set_key_info_report
-
+from ..domain.protocol951 import build_set_key_info_report
 
 VID = 0x0816
 PID = 0x2475

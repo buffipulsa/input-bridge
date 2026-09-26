@@ -8,13 +8,24 @@ from __future__ import annotations
 
 import sys
 
-
 VENDOR_ID = 0x0816
 PRODUCT_ID = 0x2475
 
 
 def display(value: object) -> str:
-    """Make missing descriptor values visible in the report."""
+    """Format a descriptor value for the inspection report.
+
+    Parameters
+    ----------
+    value : object
+        A value returned by hidapi, possibly ``None``, an empty string, or
+        bytes.
+
+    Returns
+    -------
+    str
+        A printable value, using ``<not reported>`` for missing values.
+    """
 
     if value is None or value == "":
         return "<not reported>"

@@ -8,11 +8,19 @@ from __future__ import annotations
 
 import sys
 import time
-
+from typing import Final
 
 VENDOR_ID = 0x0816
 PRODUCT_ID = 0x2475
 OBSERVATION_SECONDS = 10
+
+REPORT_IDS: Final[dict[tuple[int, int], int]] = {
+    (0x0001, 0x0006): 1,
+    (0x000C, 0x0001): 3,
+    (0x0001, 0x0080): 4,
+    (0x0001, 0x000C): 5,
+    (0x0001, 0x0002): 2,
+}
 
 
 def report_id_for(device: dict[str, object]) -> int:
@@ -21,13 +29,17 @@ def report_id_for(device: dict[str, object]) -> int:
     if device.get("interface_number") == 1:
         return 0
 
-    return {
-        (0x0001, 0x0006): 1,
-        (0x000C, 0x0001): 3,
-        (0x0001, 0x0080): 4,
-        (0x0001, 0x000C): 5,
-        (0x0001, 0x0002): 2,
-    }[(device["usage_page"], device["usage"])]
+    usage_page = device.get("usage_page")
+    usage = device.get("usage")
+    if not isinstance(usage_page, int) or not isinstance(usage, int):
+        raise TypeError("selected HID collection has invalid usage metadata")
+
+    try:
+        return REPORT_IDS[(usage_page, usage)]
+    except KeyError as error:
+        raise ValueError(
+            f"unsupported HID collection usage 0x{usage_page:04X}:0x{usage:04X}"
+        ) from error
 
 
 def main() -> int:
