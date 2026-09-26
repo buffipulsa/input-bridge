@@ -10,12 +10,15 @@ import argparse
 import ctypes
 import json
 import struct
+import subprocess
 import sys
 from ctypes import wintypes
+from pathlib import Path
 
-from ..application.actions import execute_action
+from ..application.actions import execute_action, execute_profile_action
 from ..application.bindings import DRY_RUN_BINDINGS, LOGICAL_DRY_RUN_BINDINGS
 from ..domain.event_normalizer import MacropadEventNormalizer
+from ..domain.profiles import ProfileDocument, load_profile
 
 VID_PID = "VID_0816&PID_2475"
 DEFAULT_OBSERVATION_SECONDS = 5
@@ -278,6 +281,11 @@ def main() -> int:
         action="store_true",
         help="execute configured host actions instead of only printing dry-run output",
     )
+    parser.add_argument(
+        "--profile",
+        type=Path,
+        help="profile JSON to use for opt-in script actions",
+    )
     args = parser.parse_args()
     observation_ms = max(0.1, args.seconds) * 1000
     event_normalizer = MacropadEventNormalizer()
@@ -285,6 +293,14 @@ def main() -> int:
     label = " ".join(args.label).strip() or input("Control label: ").strip()
     if not label:
         label = "unlabeled"
+
+    profile: ProfileDocument | None = None
+    if args.profile is not None:
+        try:
+            profile = load_profile(args.profile)
+        except (OSError, TypeError, ValueError) as error:
+            print(f"Could not load profile: {error}", file=sys.stderr)
+            return 2
 
     callback_type = ctypes.WINFUNCTYPE(
         ctypes.c_ssize_t,
@@ -319,11 +335,26 @@ def main() -> int:
                                     flush=True,
                                 )
                             if args.execute_actions:
-                                execute_action(logical_event)
-                                print(
-                                    f"ACTION executed logical:{logical_event}",
-                                    flush=True,
-                                )
+                                try:
+                                    if profile is None:
+                                        execute_action(logical_event)
+                                    else:
+                                        execute_profile_action(logical_event, profile)
+                                except (
+                                    LookupError,
+                                    OSError,
+                                    RuntimeError,
+                                    subprocess.CalledProcessError,
+                                ) as error:
+                                    print(
+                                        f"ACTION failed logical:{logical_event}: {error}",
+                                        flush=True,
+                                    )
+                                else:
+                                    print(
+                                        f"ACTION executed logical:{logical_event}",
+                                        flush=True,
+                                    )
                         print(normalized_keyboard_event(keyboard), flush=True)
                         print(
                             f"KEYBOARD path={name} "
