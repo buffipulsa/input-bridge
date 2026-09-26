@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -49,6 +50,18 @@ GLOBAL_PLACEHOLDER_ACTIONS = {
     "K2-PRESS": "Return to default layer",
     "K3-PRESS": "Emergency stop",
 }
+
+
+def default_profile_directory() -> Path:
+    """Return the per-user Windows directory for Input Bridge profiles."""
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    base_directory = (
+        Path(local_app_data)
+        if local_app_data
+        else Path.home() / "AppData" / "Local"
+    )
+    return base_directory / "Input Bridge" / "profiles"
 
 
 class LayerEditor(QMainWindow):
@@ -569,7 +582,10 @@ class LayerEditor(QMainWindow):
         filename, _selected_filter = QFileDialog.getSaveFileName(
             self,
             "Save Input Bridge Profile",
-            str(self.profile_path or Path("profile.json")),
+            str(
+                self.profile_path
+                or default_profile_directory() / "profile.input-bridge.json"
+            ),
             "Input Bridge profiles (*.json);;All files (*.*)",
         )
         if filename:
@@ -592,6 +608,7 @@ class LayerEditor(QMainWindow):
         self.save_current_assignment()
         self.sync_profile_bindings()
         try:
+            self.profile_path.parent.mkdir(parents=True, exist_ok=True)
             save_profile(self.profile, self.profile_path)
         except OSError as error:
             QMessageBox.warning(self, "Profile not saved", str(error))
@@ -604,7 +621,7 @@ class LayerEditor(QMainWindow):
         filename, _selected_filter = QFileDialog.getOpenFileName(
             self,
             "Open Input Bridge Profile",
-            str(self.profile_path or Path.cwd()),
+            str(self.profile_path or default_profile_directory()),
             "Input Bridge profiles (*.json);;All files (*.*)",
         )
         if filename:
