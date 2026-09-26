@@ -1,4 +1,9 @@
-"""Read active profile metadata and all 25 stored key entries."""
+"""Inspect vendor-interface metadata without communicating with the device.
+
+The vendor protocol for reading persistent state has not been verified. This
+module intentionally uses only hid.enumerate and never opens a HID handle or
+sends an input, output, or feature report.
+"""
 
 from __future__ import annotations
 
@@ -10,51 +15,47 @@ VENDOR_USAGE_PAGE = 0xFF00
 VENDOR_USAGE = 0x0002
 
 
-def find_vendor_path() -> str:
-    matches = [
-        item for item in hid.enumerate(VID, PID)
+def find_vendor_devices() -> list[dict[str, object]]:
+    """Return matching vendor-defined HID interface metadata."""
+
+    return [
+        item
+        for item in hid.enumerate(VID, PID)
         if item.get("interface_number") == 2
         and item.get("usage_page") == VENDOR_USAGE_PAGE
         and item.get("usage") == VENDOR_USAGE
     ]
-    if len(matches) != 1:
-        raise RuntimeError(f"expected one MI_02 vendor interface, found {len(matches)}")
-    return matches[0]["path"]
-
-
-def request(device: hid.device, payload: list[int]) -> bytes:
-    report = bytes([0, 0x06, *payload, *([0] * (63 - len(payload)))])
-    written = device.write(report)
-    if written != 65:
-        raise RuntimeError(f"short HID write: {written}/65 bytes")
-    response = bytes(device.read(64, timeout_ms=1000))
-    if len(response) != 64:
-        raise RuntimeError(f"short HID response: {len(response)}/64 bytes")
-    return response
 
 
 def main() -> None:
-    device = hid.device()
-    try:
-        path = find_vendor_path()
-        device.open_path(path)
+    """Print vendor-interface metadata without sending device commands."""
 
-        config = request(device, [5])
-        print("CONFIG:", config.hex(" "))
-        print(f"profile={config[19]} layer={config[21]} layers={config[20]}")
+    matches = find_vendor_devices()
+    print(f"Read-only vendor interface inspection for {VID:04X}:{PID:04X}")
+    if not matches:
+        print("No matching MI_02 vendor interface found.")
+        return
 
-        raw = bytearray()
-        for offset in (0, 56):
-            response = request(device, [8, 58, offset & 0xFF, offset >> 8, 0, 0])
-            print(f"LAYOUT offset={offset}:", response.hex(" "))
-            raw.extend(response[8:])
+    for index, device in enumerate(matches, start=1):
+        print(f"[{index}]")
+        for field in (
+            "path",
+            "interface_number",
+            "usage_page",
+            "usage",
+            "manufacturer_string",
+            "product_string",
+            "serial_number",
+            "max_input_report_size",
+            "max_output_report_size",
+            "max_feature_report_size",
+        ):
+            print(f"  {field}: {device.get(field, '<not reported>')}")
 
-        print("KEY ENTRIES:")
-        for index in range(25):
-            values = tuple(raw[index * 4:index * 4 + 4])
-            print(f"{index:2}: {values}")
-    finally:
-        device.close()
+    print(
+        "Persistent device state was not requested because the vendor "
+        "read protocol is unverified."
+    )
 
 
 if __name__ == "__main__":
