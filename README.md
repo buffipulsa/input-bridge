@@ -2,6 +2,9 @@
 
 **Documentation:** [Read the online documentation](https://buffipulsa.github.io/input-bridge/)
 
+> **Development status:** Input Bridge is an active work-in-progress. APIs,
+> profile formats, UI behavior, and hardware support may change without notice.
+
 Input Bridge is host-side software for a programmable USB macropad with 16
 mechanical keys and three rotary encoders.
 
