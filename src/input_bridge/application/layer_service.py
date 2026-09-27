@@ -13,14 +13,22 @@ class LayerBackend(Protocol):
     def roots(self) -> list[Layer]:
         """Return the top-level layers."""
 
+        ...
+
     def add_root(self, name: str) -> Layer:
         """Create and return a top-level layer."""
+
+        ...
 
     def add_child(self, parent: Layer, name: str) -> Layer:
         """Create and return a child layer."""
 
+        ...
+
     def replace_roots(self, roots: list[Layer]) -> None:
         """Replace the top-level layers."""
+
+        ...
 
 
 class LayerService:
