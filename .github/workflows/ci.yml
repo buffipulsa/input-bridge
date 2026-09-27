@@ -1,0 +1,35 @@
+name: Check project
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install UV
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          python-version: "3.14"
+
+      - name: Install project and development dependencies
+        run: uv sync --locked --group dev
+
+      - name: Run Ruff
+        run: uv run ruff check src tests
+
+      - name: Run tests
+        run: uv run python -m unittest discover -s tests -v
+
+      - name: Compile Python sources
+        run: uv run python -m compileall -q src tests
