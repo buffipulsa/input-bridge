@@ -77,6 +77,77 @@ class LayerService:
 
         self.active_layer = layer
 
+    def set_global_active(self) -> None:
+        """Select the Global fallback layer."""
+
+        self.active_layer = None
+
+    def cycle_active(self, step: int) -> Layer | None:
+        """Move the active layer through non-Global layers.
+
+        Parameters
+        ----------
+        step : int
+            Direction and distance to move. Positive values move forward;
+            negative values move backward.
+
+        Returns
+        -------
+        Layer or None
+            The newly active layer, or ``None`` when no selectable layers
+            exist.
+        """
+
+        if step == 0:
+            return self.active_layer
+
+        layers: list[Layer] = []
+
+        def collect(items: list[Layer]) -> None:
+            for layer in items:
+                if not layer.locked:
+                    layers.append(layer)
+                    collect(layer.children)
+
+        collect(self.backend.roots())
+        if not layers:
+            self.set_global_active()
+            return None
+
+        if self.active_layer not in layers:
+            index = 0 if step > 0 else len(layers) - 1
+        else:
+            index = (layers.index(self.active_layer) + step) % len(layers)
+        self.active_layer = layers[index]
+        return self.active_layer
+
+    def active_path(self) -> list[str]:
+        """Return the active layer path used for action resolution.
+
+        The locked Global layer represents the empty fallback path, so it is
+        returned as an empty list. If no active layer has been selected, the
+        same empty fallback path is returned.
+        """
+
+        if self.active_layer is None:
+            return []
+
+        def find_path(layer: Layer, parents: list[str]) -> list[str] | None:
+            path = [*parents, layer.name]
+            if layer is self.active_layer:
+                return path
+            for child in layer.children:
+                result = find_path(child, path)
+                if result is not None:
+                    return result
+            return None
+
+        for root in self.backend.roots():
+            result = find_path(root, [])
+            if result is not None:
+                return [] if result == ["Global"] else result
+        return []
+
     def replace_roots(self, roots: list[Layer]) -> None:
         """Replace the layer tree and reset navigation state."""
 

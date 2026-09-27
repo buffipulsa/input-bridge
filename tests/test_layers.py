@@ -2,7 +2,9 @@
 
 import unittest
 
+from input_bridge.application.layer_service import LayerService
 from input_bridge.domain.layers import Layer, LayerTree
+from input_bridge.infrastructure.memory_layer_backend import InMemoryLayerBackend
 
 
 class LayerTests(unittest.TestCase):
@@ -53,6 +55,35 @@ class LayerTests(unittest.TestCase):
 
         self.assertEqual([layer.name for layer in tree.roots], ["Global"])
         self.assertTrue(tree.roots[0].locked)
+
+    def test_active_path_excludes_global_fallback_name(self) -> None:
+        backend = InMemoryLayerBackend()
+        maya = backend.add_root("Maya")
+        modeling = backend.add_child(maya, "Modeling")
+        service = LayerService(backend)
+
+        self.assertEqual(service.active_path(), [])
+        service.set_active(modeling)
+        self.assertEqual(service.active_path(), ["Maya", "Modeling"])
+
+    def test_cycle_active_walks_depth_first_and_wraps(self) -> None:
+        backend = InMemoryLayerBackend()
+        maya = backend.add_root("Maya")
+        maya.add_child("Modeling")
+        backend.add_root("VS Code")
+        service = LayerService(backend)
+
+        self.assertEqual(service.cycle_active(1).name, "Maya")
+        self.assertEqual(service.cycle_active(1).name, "Modeling")
+        self.assertEqual(service.cycle_active(1).name, "VS Code")
+        self.assertEqual(service.cycle_active(1).name, "Maya")
+        self.assertEqual(service.cycle_active(-1).name, "VS Code")
+
+    def test_cycle_active_uses_global_when_no_layers_exist(self) -> None:
+        service = LayerService(InMemoryLayerBackend())
+
+        self.assertIsNone(service.cycle_active(1))
+        self.assertEqual(service.active_path(), [])
 
 
 if __name__ == "__main__":
