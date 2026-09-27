@@ -9,6 +9,16 @@ The project separates physical input from host actions. The macropad emits
 stable HID events, while Input Bridge resolves those events through layered
 profiles and can run actions such as Python scripts or Windows commands.
 
+## Hardware
+
+Input Bridge was developed with the following 16-key macropad with three
+rotary encoders:
+
+![The macropad used during development](docs/images/macropad-cleaned.png)
+
+The photo shows the hardware used for development; similar-looking macropads
+may use different USB interfaces or protocols.
+
 The initial hardware target is the tested device identified by:
 
 ```text
