@@ -46,6 +46,14 @@ Not yet implemented or confirmed:
 - A complete, independently verified configuration protocol.
 - A public release package or GitHub-hosted issue tracker.
 
+## Current UI
+
+The current PySide6 editor provides a visual layer editor, physical-control
+layout, assignment inspector, script editor, runtime controls, and execution
+history.
+
+![Input Bridge layer editor](docs/images/ui-current-state.png)
+
 ## Safety boundary
 
 Input Bridge can eventually turn a hardware event into arbitrary local code
