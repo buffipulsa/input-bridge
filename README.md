@@ -1,5 +1,7 @@
 # Input Bridge
 
+**Documentation:** [Read the online documentation](https://buffipulsa.github.io/input-bridge/)
+
 Input Bridge is host-side software for a programmable USB macropad with 16
 mechanical keys and three rotary encoders.
 
@@ -45,6 +47,16 @@ Not yet implemented or confirmed:
 - Host control of the device's RGB lighting.
 - A complete, independently verified configuration protocol.
 - A public release package or GitHub-hosted issue tracker.
+
+## Documentation
+
+The API reference and public hardware notes are built from the Sphinx sources
+under `docs/` and published on GitHub Pages:
+
+[https://buffipulsa.github.io/input-bridge/](https://buffipulsa.github.io/input-bridge/)
+
+The site is rebuilt automatically when documentation or related source files
+change on `main`.
 
 ## Current UI
 
