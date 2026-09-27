@@ -12,11 +12,13 @@ import json
 import struct
 import subprocess
 import sys
+import threading
 from ctypes import wintypes
 from pathlib import Path
 
 from ..application.actions import execute_action, execute_profile_action
 from ..application.bindings import DRY_RUN_BINDINGS, LOGICAL_DRY_RUN_BINDINGS
+from ..application.runtime import InputEventSource, LogicalInputEvent
 from ..domain.event_normalizer import MacropadEventNormalizer
 from ..domain.profiles import ProfileDocument, load_profile
 
@@ -70,6 +72,7 @@ user32.DefWindowProcW.restype = ctypes.c_ssize_t
 WM_INPUT = 0x00FF
 WM_TIMER = 0x0113
 WM_DESTROY = 0x0002
+WM_CLOSE = 0x0010
 RID_INPUT = 0x10000003
 RIDI_DEVICENAME = 0x20000007
 RIM_TYPEKEYBOARD = 1
@@ -257,6 +260,149 @@ def dry_run_hid_binding(payload: bytes, path: str) -> None:
     action = DRY_RUN_BINDINGS.get(event_key)
     if action and usage != 0:
         print(f"DRY RUN {event_key} -> {action}", flush=True)
+
+
+class RawInputEventSource(InputEventSource):
+    """Read recognized macropad keyboard events through Windows Raw Input.
+
+    The source listens only to the standard keyboard usage and filters events
+    by the known macropad VID/PID path. It does not open HID handles or send
+    USB, output, or feature reports. Consumer-control knob events remain
+    unsupported here until their physical mapping is confirmed.
+    """
+
+    def __init__(self, vid_pid: str = VID_PID) -> None:
+        self.vid_pid = vid_pid
+        self._on_event = None
+        self._thread: threading.Thread | None = None
+        self._thread_id: int | None = None
+        self._hwnd: wintypes.HWND | None = None
+        self._ready = threading.Event()
+        self._error: BaseException | None = None
+
+    def start(self, on_event) -> None:
+        """Start the Raw Input message loop on a background thread."""
+
+        if sys.platform != "win32":
+            raise RuntimeError("Windows Raw Input requires Windows")
+        if self._thread is not None and self._thread.is_alive():
+            return
+
+        self._on_event = on_event
+        self._ready.clear()
+        self._error = None
+        self._thread = threading.Thread(
+            target=self._run,
+            name="input-bridge-raw-input",
+            daemon=True,
+        )
+        self._thread.start()
+        if not self._ready.wait(timeout=2):
+            raise RuntimeError("Raw Input source did not start in time")
+        if self._error is not None:
+            raise RuntimeError(f"Raw Input source failed: {self._error}") from self._error
+
+    def stop(self) -> None:
+        """Stop the Raw Input message loop."""
+
+        if self._thread is None:
+            return
+        if self._hwnd:
+            user32.PostMessageW(self._hwnd, WM_CLOSE, 0, 0)
+        self._thread.join(timeout=2)
+        if self._thread.is_alive():
+            raise RuntimeError("Raw Input source did not stop in time")
+        self._thread = None
+        self._thread_id = None
+        self._hwnd = None
+        self._on_event = None
+
+    def _run(self) -> None:
+        callback_type = ctypes.WINFUNCTYPE(
+            ctypes.c_ssize_t,
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        )
+        normalizer = MacropadEventNormalizer()
+
+        @callback_type
+        def window_proc(hwnd, message, _wparam, lparam):
+            if message == WM_INPUT:
+                data = raw_input_bytes(hwnd, lparam)
+                if len(data) >= ctypes.sizeof(RAWINPUTHEADER):
+                    header = RAWINPUTHEADER.from_buffer_copy(data)
+                    name = device_name(header.hDevice)
+                    if VID_PID in name.upper() and header.dwType == RIM_TYPEKEYBOARD:
+                        payload = data[ctypes.sizeof(RAWINPUTHEADER):]
+                        keyboard = RAWKEYBOARD.from_buffer_copy(payload)
+                        logical_event = normalizer.feed(
+                            keyboard.VKey,
+                            keyboard.Flags,
+                        )
+                        if logical_event and self._on_event is not None:
+                            self._on_event(
+                                LogicalInputEvent(control=logical_event)
+                            )
+            elif message == WM_CLOSE:
+                user32.DestroyWindow(hwnd)
+            elif message == WM_DESTROY:
+                user32.PostQuitMessage(0)
+            return user32.DefWindowProcW(hwnd, message, _wparam, lparam)
+
+        try:
+            self._thread_id = threading.get_native_id()
+            class_name = f"InputBridgeRawInputSource{self._thread_id}"
+            instance = kernel32.GetModuleHandleW(None)
+            window_class = WNDCLASSW()
+            window_class.lpfnWndProc = window_proc
+            window_class.hInstance = instance
+            window_class.lpszClassName = class_name
+            if not user32.RegisterClassW(ctypes.byref(window_class)):
+                error = ctypes.get_last_error()
+                if error != 1410:
+                    raise ctypes.WinError(error)
+
+            hwnd = user32.CreateWindowExW(
+                0,
+                class_name,
+                class_name,
+                0,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                instance,
+                None,
+            )
+            if not hwnd:
+                raise ctypes.WinError(ctypes.get_last_error())
+            self._hwnd = hwnd
+
+            registration = RAWINPUTDEVICE(
+                0x01,
+                0x06,
+                RIDEV_INPUTSINK,
+                hwnd,
+            )
+            if not user32.RegisterRawInputDevices(
+                ctypes.byref(registration),
+                1,
+                ctypes.sizeof(RAWINPUTDEVICE),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+
+            self._ready.set()
+            message = wintypes.MSG()
+            while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
+                user32.TranslateMessage(ctypes.byref(message))
+                user32.DispatchMessageW(ctypes.byref(message))
+        except (OSError, RuntimeError, ctypes.ArgumentError) as error:
+            self._error = error
+            self._ready.set()
 
 
 def main() -> int:

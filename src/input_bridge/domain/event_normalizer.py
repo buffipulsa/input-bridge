@@ -73,7 +73,10 @@ class MacropadEventNormalizer:
         if self._modifiers == 0x06 and 13 <= f_number <= 21:
             knob_action = f_number - 13
             knob = knob_action // 3 + 1
-            action = ("PRESS", "CCW", "CW")[knob_action % 3]
+            # The current device configuration emits the opposite
+            # directional key for physical rotation on all three knobs.
+            direction_actions = ("PRESS", "CW", "CCW")
+            action = direction_actions[knob_action % 3]
             return f"K{knob}-{action}"
 
         return None
