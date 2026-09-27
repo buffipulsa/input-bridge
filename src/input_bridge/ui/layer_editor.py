@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
+from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QObject, QPoint, Qt, Signal
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -32,8 +36,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..application.actions import execute_action, execute_profile_action
+from ..application.actions import (
+    describe_profile_action,
+    execute_profile_action,
+    find_profile_binding,
+)
 from ..application.layer_service import LayerService
+from ..application.runtime import LogicalInputEvent, ProfileRuntime, RuntimeMode
 from ..domain.layers import Layer, LayerTree
 from ..domain.profiles import (
     BindingDefinition,
@@ -43,6 +52,8 @@ from ..domain.profiles import (
     save_profile,
 )
 from ..infrastructure.memory_layer_backend import InMemoryLayerBackend
+from ..infrastructure.observe_raw_input import RawInputEventSource
+from .style import application_stylesheet
 
 GLOBAL_PLACEHOLDER_ACTIONS = {
     "K1-CW": "Cycle application layer forward",
@@ -50,6 +61,83 @@ GLOBAL_PLACEHOLDER_ACTIONS = {
     "K2-PRESS": "Return to default layer",
     "K3-PRESS": "Emergency stop",
 }
+
+
+class _RuntimeStatusDispatcher:
+    """Update the editor when the prototype runtime receives an event."""
+
+    def __init__(
+        self,
+        on_event: Callable[[LogicalInputEvent], None],
+    ) -> None:
+        self.on_event = on_event
+
+    def dispatch(self, event: LogicalInputEvent, _profile: ProfileDocument) -> None:
+        """Report an event without executing its configured action."""
+
+        self.on_event(event)
+
+
+class _RuntimeEventBridge(QObject):
+    """Deliver runtime events safely to the Qt GUI thread."""
+
+    event_received = Signal(object)
+
+
+class _ActionExecutionBridge(QObject):
+    """Deliver background action results safely to the Qt GUI thread."""
+
+    result_received = Signal(object)
+
+
+class _BackgroundActionExecutor:
+    """Run one profile action at a time outside the Qt GUI thread."""
+
+    def __init__(self, bridge: _ActionExecutionBridge) -> None:
+        self._bridge = bridge
+        self._executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="input-bridge-action",
+        )
+
+    def submit(
+        self,
+        event: LogicalInputEvent,
+        profile: ProfileDocument,
+        active_layer_path: tuple[str, ...],
+    ) -> None:
+        """Queue one action using a snapshot of the current profile."""
+
+        profile_snapshot = deepcopy(profile)
+        future = self._executor.submit(
+            execute_profile_action,
+            event.control,
+            profile_snapshot,
+            event.trigger,
+            active_layer_path,
+        )
+        future.add_done_callback(
+            lambda completed: self._report_result(event, completed)
+        )
+
+    def _report_result(
+        self,
+        event: LogicalInputEvent,
+        future: Future[None],
+    ) -> None:
+        """Send the action result back to the Qt thread."""
+
+        error = (
+            RuntimeError("action was cancelled")
+            if future.cancelled()
+            else future.exception()
+        )
+        self._bridge.result_received.emit((event, error))
+
+    def shutdown(self) -> None:
+        """Cancel queued actions and release the executor."""
+
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
 
 def default_profile_directory() -> Path:
@@ -75,15 +163,28 @@ class LayerEditor(QMainWindow):
 
         self.layer_service = layer_service or LayerService(InMemoryLayerBackend())
         self.selected_control_name: str | None = None
-        self.ui_assignments: dict[str, str] = {}
+        self.ui_assignments: dict[tuple[tuple[str, ...], str], str] = {}
         self.profile = ProfileDocument(name="Untitled")
         self.profile_path: Path | None = None
         self.selected_script_id: str | None = None
         self.control_buttons: dict[str, QPushButton] = {}
+        self.runtime_source = RawInputEventSource()
+        self.runtime_event_bridge = _RuntimeEventBridge(self)
+        self.runtime_event_bridge.event_received.connect(self.show_runtime_event)
+        self.action_execution_bridge = _ActionExecutionBridge(self)
+        self.action_execution_bridge.result_received.connect(
+            self.action_execution_finished
+        )
+        self.action_executor = _BackgroundActionExecutor(self.action_execution_bridge)
+        self.runtime = ProfileRuntime(
+            self.profile,
+            self.runtime_source,
+            _RuntimeStatusDispatcher(self.runtime_event_bridge.event_received.emit),
+        )
 
         self.path_layout = QHBoxLayout()
         self.tree_widget = QTreeWidget()
-        self.tree_widget.setHeaderLabel("Layers")
+        self.tree_widget.setHeaderHidden(True)
         self.tree_widget.itemDoubleClicked.connect(self.enter_layer)
         self.tree_widget.itemChanged.connect(self.rename_layer)
         self.tree_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -98,10 +199,53 @@ class LayerEditor(QMainWindow):
         layer_layout = QVBoxLayout(layer_panel)
         layer_layout.addLayout(self.path_layout)
         layer_layout.addWidget(self.tree_widget)
-        self.active_label = QLabel("Active layer: Global")
+        self.editing_label = QLabel("Editing layer: Global")
+        self.active_label = QLabel("Runtime active layer: Global")
+        layer_layout.addWidget(self.editing_label)
         layer_layout.addWidget(self.active_label)
         layer_layout.addWidget(new_layer_button)
         layer_layout.addWidget(set_active_button)
+
+        runtime_panel = QFrame()
+        runtime_panel.setFrameShape(QFrame.Shape.StyledPanel)
+        runtime_layout = QVBoxLayout(runtime_panel)
+        runtime_layout.addWidget(QLabel("Runtime prototype"))
+        self.runtime_status_label = QLabel(
+            "Stopped — DRY RUN — Windows Raw Input"
+        )
+        self.runtime_event_label = QLabel("Last event: —")
+        runtime_layout.addWidget(self.runtime_status_label)
+        runtime_layout.addWidget(self.runtime_event_label)
+        runtime_layout.addWidget(QLabel("Execution history"))
+        self.runtime_history = QListWidget()
+        self.runtime_history.setMaximumHeight(120)
+        runtime_layout.addWidget(self.runtime_history)
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("Mode:"))
+        self.runtime_mode_combo = QComboBox()
+        self.runtime_mode_combo.addItem("Dry Run", RuntimeMode.DRY_RUN)
+        self.runtime_mode_combo.addItem("Execute Actions", RuntimeMode.EXECUTE)
+        self.runtime_mode_combo.currentIndexChanged.connect(self.runtime_mode_changed)
+        mode_layout.addWidget(self.runtime_mode_combo)
+        runtime_layout.addLayout(mode_layout)
+        runtime_buttons = QHBoxLayout()
+        start_runtime_button = QPushButton("Start")
+        start_runtime_button.clicked.connect(self.start_runtime)
+        stop_runtime_button = QPushButton("Stop")
+        stop_runtime_button.clicked.connect(self.stop_runtime)
+        emergency_stop_button = QPushButton("Emergency Stop")
+        emergency_stop_button.clicked.connect(self.emergency_stop_runtime)
+        reset_emergency_button = QPushButton("Reset Stop")
+        reset_emergency_button.clicked.connect(self.reset_emergency_stop)
+        simulate_button = QPushButton("Simulate Selected")
+        simulate_button.clicked.connect(self.simulate_selected_event)
+        runtime_buttons.addWidget(start_runtime_button)
+        runtime_buttons.addWidget(stop_runtime_button)
+        runtime_buttons.addWidget(emergency_stop_button)
+        runtime_buttons.addWidget(reset_emergency_button)
+        runtime_buttons.addWidget(simulate_button)
+        runtime_layout.addLayout(runtime_buttons)
+        layer_layout.addWidget(runtime_panel)
 
         self.control_grid = self.build_control_grid()
         self.inspector = self.build_inspector()
@@ -149,11 +293,14 @@ class LayerEditor(QMainWindow):
         layout.addWidget(title)
 
         knob_row = QHBoxLayout()
+        knob_row.setSpacing(12)
         for knob in range(1, 4):
             knob_row.addWidget(self.knob_card(knob))
         layout.addLayout(knob_row)
 
         grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
         for row in range(4):
             for column in range(4):
                 control_name = f"R{row + 1}C{column + 1}"
@@ -166,9 +313,12 @@ class LayerEditor(QMainWindow):
         """Create a placeholder card for one encoder and its triggers."""
 
         card = QFrame()
+        card.setObjectName("knobCard")
         card.setFrameShape(QFrame.Shape.StyledPanel)
         layout = QVBoxLayout(card)
-        layout.addWidget(QLabel(f"K{knob}"))
+        title = QLabel(f"K{knob}")
+        title.setObjectName("knobTitle")
+        layout.addWidget(title)
         for trigger in ("PRESS", "CW", "CCW"):
             control = f"K{knob}-{trigger}"
             label = {
@@ -177,6 +327,8 @@ class LayerEditor(QMainWindow):
                 "CCW": "Counter Clockwise",
             }[trigger]
             button = QPushButton(label)
+            button.setObjectName("knobButton")
+            button.setMinimumHeight(34)
             button.clicked.connect(
                 lambda _checked=False, selected=control: self.select_control(selected)
             )
@@ -188,6 +340,7 @@ class LayerEditor(QMainWindow):
         """Create a placeholder control button for the prototype UI."""
 
         button = QPushButton(f"{name}\nUnassigned")
+        button.setObjectName("controlButton")
         button.setMinimumSize(110, 80)
         button.clicked.connect(lambda _checked=False, control=name: self.select_control(control))
         self.control_buttons[name] = button
@@ -274,8 +427,8 @@ class LayerEditor(QMainWindow):
 
         script_layout.addWidget(
             QLabel(
-                "Scripts are stored as source text only. They are not executed "
-                "by this editor yet."
+                "Scripts are stored as source text in the profile. Execution "
+                "requires an explicit Test Action or runtime execution path."
             )
         )
         tabs.addTab(script_panel, "Scripts")
@@ -288,7 +441,7 @@ class LayerEditor(QMainWindow):
         """Display details for a selected control."""
 
         self.selected_control_name = control
-        assignment = self.ui_assignments.get(control)
+        assignment = self.ui_assignments.get(self.assignment_key(control))
         action = self.assignment_label(
             assignment,
             fallback=GLOBAL_PLACEHOLDER_ACTIONS.get(control, "No assignment"),
@@ -323,10 +476,11 @@ class LayerEditor(QMainWindow):
             return
 
         assignment = self.assignment_combo.currentData()
+        key = self.assignment_key(self.selected_control_name)
         if assignment is None:
-            self.ui_assignments.pop(self.selected_control_name, None)
+            self.ui_assignments.pop(key, None)
         else:
-            self.ui_assignments[self.selected_control_name] = str(assignment)
+            self.ui_assignments[key] = str(assignment)
         self.refresh_control_labels()
 
     def assign_selected_script(self) -> None:
@@ -348,7 +502,7 @@ class LayerEditor(QMainWindow):
             return
         if self.script_by_id(self.selected_script_id) is None:
             return
-        self.ui_assignments[self.selected_control_name] = (
+        self.ui_assignments[self.assignment_key(self.selected_control_name)] = (
             f"script:{self.selected_script_id}"
         )
         self.select_control(self.selected_control_name)
@@ -367,6 +521,26 @@ class LayerEditor(QMainWindow):
             return f"Script: {script.name}" if script is not None else "Missing script"
         return assignment
 
+    def current_layer_path(self) -> tuple[str, ...]:
+        """Return the path represented by the current layer view.
+
+        The root view represents the Global fallback and therefore uses an
+        empty path. Non-global assignments use paths such as
+        ``("Maya", "Modeling")``.
+        """
+
+        return tuple(layer.name for layer in self.layer_service.navigation_stack)
+
+    def active_layer_path(self) -> tuple[str, ...]:
+        """Return the active layer path used by the runtime prototype."""
+
+        return tuple(self.layer_service.active_path())
+
+    def assignment_key(self, control: str) -> tuple[tuple[str, ...], str]:
+        """Return the session-state key for a control in the current layer."""
+
+        return self.current_layer_path(), control
+
     def script_by_id(self, script_id: str) -> ScriptDefinition | None:
         """Return a session-local script by identifier."""
 
@@ -379,7 +553,7 @@ class LayerEditor(QMainWindow):
         """Refresh assignment choices from the current session-local scripts."""
 
         selected_assignment = (
-            self.ui_assignments.get(self.selected_control_name)
+            self.ui_assignments.get(self.assignment_key(self.selected_control_name))
             if self.selected_control_name is not None
             else None
         )
@@ -498,8 +672,8 @@ class LayerEditor(QMainWindow):
         self.profile.scripts.remove(script)
         assignment = f"script:{script.script_id}"
         self.ui_assignments = {
-            control: value
-            for control, value in self.ui_assignments.items()
+            key: value
+            for key, value in self.ui_assignments.items()
             if value != assignment
         }
         self.selected_script_id = None
@@ -509,7 +683,7 @@ class LayerEditor(QMainWindow):
             self.select_control(self.selected_control_name)
 
     def test_action(self) -> None:
-        """Test the selected action for R1C1."""
+        """Queue the selected R1C1 action for background execution."""
 
         if self.selected_control_name != "R1C1":
             QMessageBox.information(
@@ -519,7 +693,7 @@ class LayerEditor(QMainWindow):
             )
             return
         self.save_current_assignment()
-        assignment = self.ui_assignments.get("R1C1")
+        assignment = self.ui_assignments.get(self.assignment_key("R1C1"))
         if assignment is None:
             QMessageBox.information(
                 self,
@@ -528,32 +702,239 @@ class LayerEditor(QMainWindow):
             )
             return
 
+        self.sync_profile_bindings()
+        self.action_executor.submit(
+            LogicalInputEvent(control="R1C1"),
+            self.profile,
+            tuple(self.active_layer_path()),
+        )
+        self.runtime_event_label.setText("Test Action: R1C1 → queued")
+        self.record_runtime_history("R1C1 (press) → Test Action — queued")
+
+    def start_runtime(self) -> None:
+        """Start the read-only Windows Raw Input runtime."""
+
         try:
-            if assignment == "Open Spotify":
-                execute_action("R1C1")
-            elif assignment.startswith("script:"):
-                self.sync_profile_bindings()
-                execute_profile_action("R1C1", self.profile)
-            else:
-                raise LookupError(f"unsupported assignment {assignment!r}")
-        except (
-            LookupError,
-            OSError,
-            RuntimeError,
-            subprocess.CalledProcessError,
-        ) as error:
-            QMessageBox.warning(self, "Action failed", str(error))
+            self.runtime.start()
+        except RuntimeError as error:
+            QMessageBox.warning(self, "Runtime failed to start", str(error))
+            return
+        self.update_runtime_status("Running")
+
+    def stop_runtime(self) -> None:
+        """Stop the UI-only runtime prototype."""
+
+        self.runtime.stop()
+        try:
+            self.runtime.stop()
+        except RuntimeError as error:
+            QMessageBox.warning(self, "Runtime failed to stop", str(error))
+            return
+        self.update_runtime_status("Stopped")
+
+    def emergency_stop_runtime(self) -> None:
+        """Stop runtime input and lock it until explicitly reset."""
+
+        try:
+            self.runtime.emergency_stop()
+        except RuntimeError as error:
+            QMessageBox.warning(self, "Emergency stop failed", str(error))
+            return
+        self.runtime_status_label.setText("EMERGENCY STOP — reset required")
+
+    def reset_emergency_stop(self) -> None:
+        """Clear the runtime emergency stop without starting input."""
+
+        self.runtime.reset_emergency_stop()
+        self.update_runtime_status("Stopped")
+
+    def runtime_mode_changed(self, index: int) -> None:
+        """Change runtime mode after confirming executable dispatch."""
+
+        mode = self.runtime_mode_combo.itemData(index)
+        if mode == RuntimeMode.EXECUTE:
+            answer = QMessageBox.question(
+                self,
+                "Enable action execution",
+                "Live macropad events may run profile scripts and commands. "
+                "Enable execution mode?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self.runtime_mode_combo.blockSignals(True)
+                self.runtime_mode_combo.setCurrentIndex(0)
+                self.runtime_mode_combo.blockSignals(False)
+                return
+        self.runtime.set_mode(mode)
+        state = "Running" if self.runtime.is_running else "Stopped"
+        self.update_runtime_status(state)
+
+    def update_runtime_status(self, state: str) -> None:
+        """Show runtime state and whether action execution is enabled."""
+
+        mode = "DRY RUN" if self.runtime.mode == RuntimeMode.DRY_RUN else "EXECUTION ENABLED"
+        self.runtime_status_label.setText(f"{state} — {mode} — Windows Raw Input")
+
+    def simulate_selected_event(self) -> None:
+        """Send the selected control through the runtime without executing it."""
+
+        if self.selected_control_name is None:
+            QMessageBox.information(
+                self,
+                "No control selected",
+                "Select a button or encoder action first.",
+            )
+            return
+        if not self.runtime.is_running:
+            QMessageBox.information(
+                self,
+                "Runtime stopped",
+                "Start the runtime prototype before simulating an event.",
+            )
+            return
+        self.save_current_assignment()
+        self.sync_profile_bindings()
+        self.runtime.dispatch(LogicalInputEvent(control=self.selected_control_name))
+
+    def show_runtime_event(
+        self,
+        event: LogicalInputEvent,
+    ) -> None:
+        """Display the latest event and dry-run action description."""
+
+        self.sync_profile_bindings()
+        active_layer_path = tuple(self.active_layer_path())
+        if self.handle_builtin_layer_action(event, active_layer_path):
+            return
+        description = describe_profile_action(
+            event.control,
+            self.runtime.profile,
+            event.trigger,
+            active_layer_path,
+        )
+        self.runtime_event_label.setText(
+            f"Last event: {event.control} ({event.trigger}) → {description}"
+        )
+        if description == "Unassigned":
+            self.record_runtime_history(
+                f"{event.control} ({event.trigger}) "
+                f"[{self.layer_path_label(active_layer_path)}] "
+                "→ unassigned — ignored"
+            )
+            return
+        if self.runtime.mode != RuntimeMode.EXECUTE:
+            self.record_runtime_history(
+                f"{event.control} ({event.trigger}) [{self.layer_path_label(active_layer_path)}] "
+                f"→ {description} — dry run"
+            )
+            return
+
+        self.action_executor.submit(
+            event,
+            self.runtime.profile,
+            active_layer_path,
+        )
+        self.runtime_event_label.setText(
+            f"Last event: {event.control} ({event.trigger}) → "
+            f"{description} [queued]"
+        )
+        self.record_runtime_history(
+            f"{event.control} ({event.trigger}) [{self.layer_path_label(active_layer_path)}] "
+            f"→ {description} — queued"
+        )
+
+    def action_execution_finished(self, result: object) -> None:
+        """Display the result of an action executed by the worker."""
+
+        event, error = result
+        if error is not None:
+            self.runtime_event_label.setText(
+                f"Last event: {event.control} ({event.trigger}) → "
+                f"action failed: {error}"
+            )
+            self.record_runtime_history(
+                f"{event.control} ({event.trigger}) → action failed"
+            )
+            return
+        self.runtime_event_label.setText(
+            f"Last event: {event.control} ({event.trigger}) → action executed"
+        )
+        self.record_runtime_history(
+            f"{event.control} ({event.trigger}) → action executed"
+        )
+
+    def handle_builtin_layer_action(
+        self,
+        event: LogicalInputEvent,
+        active_layer_path: tuple[str, ...],
+    ) -> bool:
+        """Handle an unassigned built-in control for layer navigation."""
+
+        if event.trigger != "press" and event.control not in {"K1-CW", "K1-CCW"}:
+            return False
+        if find_profile_binding(
+            event.control,
+            self.runtime.profile,
+            event.trigger,
+            active_layer_path,
+        ) is not None:
+            return False
+
+        step = {"K1-CW": 1, "K1-CCW": -1}.get(event.control)
+        if event.control == "K2-PRESS":
+            if self.runtime.mode == RuntimeMode.DRY_RUN:
+                self.record_runtime_history("K2-PRESS → Global — dry run")
+                return True
+            self.layer_service.set_global_active()
+            self.refresh_tree()
+            self.record_runtime_history("K2-PRESS → Global — active")
+            return True
+        if step is None:
+            return False
+
+        if self.runtime.mode == RuntimeMode.DRY_RUN:
+            direction = "next" if step > 0 else "previous"
+            self.record_runtime_history(
+                f"{event.control} → {direction} layer — dry run"
+            )
+            return True
+
+        layer = self.layer_service.cycle_active(step)
+        self.refresh_tree()
+        active_name = "/".join(self.active_layer_path()) if layer else "Global"
+        self.record_runtime_history(f"{event.control} → {active_name} — active")
+        return True
+
+    def layer_path_label(self, layer_path: tuple[str, ...]) -> str:
+        """Format a layer path for the local execution history."""
+
+        return "/".join(layer_path) if layer_path else "Global"
+
+    def record_runtime_history(self, message: str) -> None:
+        """Add one bounded, metadata-only entry to the execution history."""
+
+        timestamp = datetime.now().astimezone().strftime("%H:%M:%S")
+        self.runtime_history.insertItem(0, QListWidgetItem(f"{timestamp}  {message}"))
+        while self.runtime_history.count() > 50:
+            self.runtime_history.takeItem(self.runtime_history.count() - 1)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Stop input and release the background action executor."""
+
+        self.runtime.stop()
+        self.action_executor.shutdown()
+        super().closeEvent(event)
 
     def sync_profile_bindings(self) -> None:
         """Copy the UI's current script assignments into the profile model."""
 
         bindings: list[BindingDefinition] = []
-        for control, assignment in self.ui_assignments.items():
+        for (layer_path, control), assignment in self.ui_assignments.items():
             if assignment == "Open Spotify":
                 bindings.append(
                     BindingDefinition(
                         control=control,
                         action_id="open_spotify",
+                        layer_path=list(layer_path),
                     )
                 )
             elif assignment.startswith("script:"):
@@ -561,6 +942,7 @@ class LayerEditor(QMainWindow):
                     BindingDefinition(
                         control=control,
                         action_id="run_script",
+                        layer_path=list(layer_path),
                         script_id=assignment.removeprefix("script:"),
                     )
                 )
@@ -584,10 +966,11 @@ class LayerEditor(QMainWindow):
 
         self.ui_assignments = {}
         for binding in self.profile.bindings:
+            key = (tuple(binding.layer_path), binding.control)
             if binding.action_id == "run_script" and binding.script_id is not None:
-                self.ui_assignments[binding.control] = f"script:{binding.script_id}"
+                self.ui_assignments[key] = f"script:{binding.script_id}"
             elif binding.action_id == "open_spotify":
-                self.ui_assignments[binding.control] = "Open Spotify"
+                self.ui_assignments[key] = "Open Spotify"
 
     def save_profile_as_dialog(self) -> None:
         """Choose a path and save the current profile as JSON."""
@@ -650,6 +1033,7 @@ class LayerEditor(QMainWindow):
             QMessageBox.warning(self, "Profile not loaded", str(error))
             return
         self.profile_path = path
+        self.runtime.profile = self.profile
         self.restore_profile_layers()
         self.restore_profile_bindings()
         self.refresh_script_list()
@@ -662,7 +1046,7 @@ class LayerEditor(QMainWindow):
         """Show the current assignment on each control button."""
 
         for control, button in self.control_buttons.items():
-            assignment = self.ui_assignments.get(control)
+            assignment = self.ui_assignments.get(self.assignment_key(control))
             label = self.assignment_label(assignment, "No assignment")
             button.setText(f"{control}\n{label}")
 
@@ -673,7 +1057,7 @@ class LayerEditor(QMainWindow):
             if control == self.selected_control_name:
                 button.setStyleSheet(
                     "QPushButton { border: 2px solid #3b82f6; "
-                    "border-radius: 4px; }"
+                    "border-radius: 8px; }"
                 )
             else:
                 button.setStyleSheet("")
@@ -693,6 +1077,15 @@ class LayerEditor(QMainWindow):
         self.refresh_path()
         current_layer = self.layer_service.current_layer()
         self.new_layer_button.setEnabled(current_layer is None or not current_layer.locked)
+        editing_path = self.current_layer_path()
+        editing_name = "/".join(editing_path) if editing_path else "Global"
+        active_path = self.active_layer_path()
+        active_name = "/".join(active_path) if active_path else "Global"
+        self.editing_label.setText(f"Editing layer: {editing_name}")
+        self.active_label.setText(f"Runtime active layer: {active_name}")
+        self.refresh_control_labels()
+        if self.selected_control_name is not None:
+            self.select_control(self.selected_control_name)
 
     def show_tree_context_menu(self, position: QPoint) -> None:
         """Show actions for the current tree view location."""
@@ -726,12 +1119,18 @@ class LayerEditor(QMainWindow):
         for index, name in enumerate(path):
             if index:
                 self.path_layout.addWidget(QLabel("/"))
-            path_button = QPushButton(name)
-            path_button.setFlat(True)
-            path_button.clicked.connect(
-                lambda _checked=False, depth=index: self.navigate_to(depth)
-            )
-            self.path_layout.addWidget(path_button)
+            if index == 0:
+                root_label = QLabel(name)
+                root_label.setObjectName("breadcrumbRoot")
+                self.path_layout.addWidget(root_label)
+            else:
+                path_button = QPushButton(name)
+                path_button.setObjectName("breadcrumbButton")
+                path_button.setFlat(True)
+                path_button.clicked.connect(
+                    lambda _checked=False, depth=index: self.navigate_to(depth)
+                )
+                self.path_layout.addWidget(path_button)
         self.path_layout.addStretch()
 
     def add_layer_item(
@@ -743,6 +1142,10 @@ class LayerEditor(QMainWindow):
 
         item = QTreeWidgetItem([layer.name])
         item.setData(0, Qt.ItemDataRole.UserRole, layer)
+        if layer is self.layer_service.active_layer:
+            font = item.font(0)
+            font.setBold(True)
+            item.setFont(0, font)
         if not layer.locked:
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
         if parent_item is None:
@@ -832,13 +1235,16 @@ class LayerEditor(QMainWindow):
         if layer is None:
             return
         self.layer_service.set_active(layer)
-        self.active_label.setText(f"Active layer: {layer.name}")
+        active_path = self.active_layer_path()
+        active_name = "/".join(active_path) if active_path else "Global"
+        self.active_label.setText(f"Runtime active layer: {active_name}")
 
 
 def main() -> int:
     """Run the layer editor application."""
 
     app = QApplication(sys.argv)
+    app.setStyleSheet(application_stylesheet())
     window = LayerEditor()
     window.show()
     return app.exec()
