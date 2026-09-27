@@ -22,7 +22,9 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # API autodoc imports the Windows Raw Input implementation. Build on the
+    # target platform so documentation imports match the supported runtime.
+    runs-on: windows-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
