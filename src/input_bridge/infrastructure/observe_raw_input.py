@@ -16,7 +16,7 @@ import threading
 from ctypes import wintypes
 from pathlib import Path
 
-from ..application.actions import execute_action, execute_profile_action
+from ..application.actions import execute_profile_action
 from ..application.bindings import DRY_RUN_BINDINGS, LOGICAL_DRY_RUN_BINDINGS
 from ..application.runtime import InputEventSource, LogicalInputEvent
 from ..domain.event_normalizer import MacropadEventNormalizer
@@ -483,9 +483,10 @@ def main() -> int:
                             if args.execute_actions:
                                 try:
                                     if profile is None:
-                                        execute_action(logical_event)
-                                    else:
-                                        execute_profile_action(logical_event, profile)
+                                        raise LookupError(
+                                            "--execute-actions requires --profile"
+                                        )
+                                    execute_profile_action(logical_event, profile)
                                 except (
                                     LookupError,
                                     OSError,

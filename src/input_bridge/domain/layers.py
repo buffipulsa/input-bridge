@@ -154,7 +154,8 @@ class LayerTree:
         """Build a layer tree from serialized root layers.
 
         An empty list creates the default locked Global layer. A root named
-        Global is always restored as locked.
+        Global is always restored as locked, and is added when a profile file
+        contains only an application layer.
 
         Raises
         ------
@@ -167,9 +168,12 @@ class LayerTree:
         ):
             raise ValueError("layers must be a list of objects")
         roots = [Layer.from_dict(item) for item in data]
-        if not roots:
-            return cls()
-        for root in roots:
-            if root.name.casefold() == "global":
-                root.locked = True
+        global_root = next(
+            (root for root in roots if root.name.casefold() == "global"),
+            None,
+        )
+        if global_root is None:
+            roots.insert(0, Layer("Global", locked=True))
+        else:
+            global_root.locked = True
         return cls(roots=roots)

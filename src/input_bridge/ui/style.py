@@ -145,6 +145,16 @@ def application_stylesheet() -> str:
         selection-color: #ffffff;
     }
 
+    QTreeWidget QLineEdit {
+        background: #2a3039;
+        color: #ffffff;
+        border: 1px solid #6a9de0;
+        border-radius: 3px;
+        selection-background-color: #3b82f6;
+        selection-color: #ffffff;
+        padding: 1px 4px;
+    }
+
     QComboBox,
     QLineEdit {
         padding: 6px 8px;

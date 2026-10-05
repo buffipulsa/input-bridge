@@ -110,6 +110,22 @@ class ProfileDocumentTests(unittest.TestCase):
             "Script: missing missing",
         )
 
+    def test_describe_profile_action_reports_windows_action(self) -> None:
+        profile = ProfileDocument(
+            name="Test",
+            bindings=[
+                BindingDefinition(
+                    control="R1C1",
+                    action_id="open_file_explorer",
+                )
+            ],
+        )
+
+        self.assertEqual(
+            describe_profile_action("R1C1", profile),
+            "Open File Explorer",
+        )
+
     def test_layer_specific_binding_wins_over_parent_and_global(self) -> None:
         profile = ProfileDocument(
             name="Test",

@@ -9,6 +9,21 @@ from collections.abc import Sequence
 
 from ..domain.profiles import BindingDefinition, ProfileDocument
 
+WINDOW_ACTION_LABELS = {
+    "open_file_explorer": "Open File Explorer",
+    "open_settings": "Open Windows Settings",
+    "open_task_manager": "Open Task Manager",
+    "open_notepad": "Open Notepad",
+    "open_terminal": "Open Windows Terminal",
+}
+
+WINDOW_EXECUTABLES = {
+    "open_file_explorer": ("explorer.exe",),
+    "open_task_manager": ("taskmgr.exe",),
+    "open_notepad": ("notepad.exe",),
+    "open_terminal": ("wt.exe",),
+}
+
 
 def find_profile_binding(
     logical_event: str,
@@ -82,8 +97,8 @@ def describe_profile_action(
     )
     if binding is None:
         return "Unassigned"
-    if binding.action_id == "open_spotify":
-        return "Open Spotify"
+    if binding.action_id in WINDOW_ACTION_LABELS:
+        return WINDOW_ACTION_LABELS[binding.action_id]
     if binding.action_id == "run_script":
         if binding.script_id is None:
             return "Script: missing script id"
@@ -95,30 +110,6 @@ def describe_profile_action(
             return f"Script: missing {binding.script_id}"
         return f"Script: {script.name}"
     return f"Action: {binding.action_id}"
-
-
-def execute_action(logical_event: str) -> None:
-    """Execute the selected action for one logical event.
-
-    The first real action is intentionally narrow: R1C1 opens/activates the
-    Spotify URI registered by the Spotify Windows app.
-
-    Parameters
-    ----------
-    logical_event : str
-        Stable logical control identifier emitted by the event normalizer.
-
-    Raises
-    ------
-    RuntimeError
-        If the Spotify action is requested on a non-Windows platform.
-    """
-
-    if logical_event != "R1C1":
-        return
-    if os.name != "nt":
-        raise RuntimeError("Spotify URI launching currently requires Windows")
-    os.startfile("spotify:")
 
 
 def execute_profile_action(
@@ -159,10 +150,16 @@ def execute_profile_action(
     )
     if binding is None:
         raise LookupError(f"no profile binding for {logical_event!r}")
-    if binding.action_id == "open_spotify":
+    if binding.action_id in WINDOW_ACTION_LABELS:
         if os.name != "nt":
-            raise RuntimeError("Spotify URI launching currently requires Windows")
-        os.startfile("spotify:")
+            raise RuntimeError("Windows actions require Windows")
+        if binding.action_id == "open_settings":
+            os.startfile("ms-settings:")
+            return
+        command = WINDOW_EXECUTABLES.get(binding.action_id)
+        if command is None:
+            raise LookupError(f"unknown Windows action {binding.action_id!r}")
+        subprocess.run(command, check=True, shell=False)
         return
     if binding.action_id != "run_script" or binding.script_id is None:
         raise LookupError(f"binding for {logical_event!r} is not a script action")

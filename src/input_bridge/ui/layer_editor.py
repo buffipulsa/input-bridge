@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QTabWidget,
     QTreeWidget,
@@ -37,6 +39,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..application.actions import (
+    WINDOW_ACTION_LABELS,
     describe_profile_action,
     execute_profile_action,
     find_profile_binding,
@@ -141,7 +144,7 @@ class _BackgroundActionExecutor:
 
 
 def default_profile_directory() -> Path:
-    """Return the per-user Windows directory for Input Bridge profiles."""
+    """Return the per-user Windows directory for InputBridge profiles."""
 
     local_app_data = os.environ.get("LOCALAPPDATA")
     base_directory = (
@@ -149,7 +152,13 @@ def default_profile_directory() -> Path:
         if local_app_data
         else Path.home() / "AppData" / "Local"
     )
-    return base_directory / "Input Bridge" / "profiles"
+    return base_directory / "InputBridge" / "profiles"
+
+
+def default_profile_path() -> Path:
+    """Return the canonical profile directory used by the editor."""
+
+    return default_profile_directory()
 
 
 class LayerEditor(QMainWindow):
@@ -163,9 +172,10 @@ class LayerEditor(QMainWindow):
 
         self.layer_service = layer_service or LayerService(InMemoryLayerBackend())
         self.selected_control_name: str | None = None
+        self.editing_layer_path: tuple[str, ...] = ()
         self.ui_assignments: dict[tuple[tuple[str, ...], str], str] = {}
         self.profile = ProfileDocument(name="Untitled")
-        self.profile_path: Path | None = None
+        self.profile_path: Path = default_profile_path()
         self.selected_script_id: str | None = None
         self.control_buttons: dict[str, QPushButton] = {}
         self.runtime_source = RawInputEventSource()
@@ -185,6 +195,7 @@ class LayerEditor(QMainWindow):
         self.path_layout = QHBoxLayout()
         self.tree_widget = QTreeWidget()
         self.tree_widget.setHeaderHidden(True)
+        self.tree_widget.itemClicked.connect(self.select_layer_item)
         self.tree_widget.itemDoubleClicked.connect(self.enter_layer)
         self.tree_widget.itemChanged.connect(self.rename_layer)
         self.tree_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -192,8 +203,6 @@ class LayerEditor(QMainWindow):
 
         new_layer_button = QPushButton("New Layer")
         new_layer_button.clicked.connect(self.create_layer)
-        set_active_button = QPushButton("Set Active")
-        set_active_button.clicked.connect(self.set_active)
 
         layer_panel = QWidget()
         layer_layout = QVBoxLayout(layer_panel)
@@ -204,7 +213,6 @@ class LayerEditor(QMainWindow):
         layer_layout.addWidget(self.editing_label)
         layer_layout.addWidget(self.active_label)
         layer_layout.addWidget(new_layer_button)
-        layer_layout.addWidget(set_active_button)
 
         runtime_panel = QFrame()
         runtime_panel.setFrameShape(QFrame.Shape.StyledPanel)
@@ -213,12 +221,29 @@ class LayerEditor(QMainWindow):
         self.runtime_status_label = QLabel(
             "Stopped — DRY RUN — Windows Raw Input"
         )
+        self.runtime_status_label.setWordWrap(True)
+        self.runtime_status_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Preferred,
+        )
         self.runtime_event_label = QLabel("Last event: —")
+        self.runtime_event_label.setWordWrap(True)
+        self.runtime_event_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Preferred,
+        )
         runtime_layout.addWidget(self.runtime_status_label)
         runtime_layout.addWidget(self.runtime_event_label)
         runtime_layout.addWidget(QLabel("Execution history"))
         self.runtime_history = QListWidget()
         self.runtime_history.setMaximumHeight(120)
+        self.runtime_history.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.runtime_history.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Preferred,
+        )
         runtime_layout.addWidget(self.runtime_history)
         mode_layout = QHBoxLayout()
         mode_layout.addWidget(QLabel("Mode:"))
@@ -251,9 +276,16 @@ class LayerEditor(QMainWindow):
         self.inspector = self.build_inspector()
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_splitter.setChildrenCollapsible(False)
         main_splitter.addWidget(layer_panel)
         main_splitter.addWidget(self.control_grid)
         main_splitter.addWidget(self.inspector)
+        layer_panel.setMinimumWidth(320)
+        self.control_grid.setMinimumWidth(520)
+        self.inspector.setMinimumWidth(360)
+        main_splitter.setStretchFactor(0, 0)
+        main_splitter.setStretchFactor(1, 1)
+        main_splitter.setStretchFactor(2, 0)
         main_splitter.setSizes([240, 560, 380])
 
         central_widget = QWidget()
@@ -263,12 +295,13 @@ class LayerEditor(QMainWindow):
         self.new_layer_button = new_layer_button
         self.refresh_tree()
         self.refresh_control_labels()
+        self.load_startup_profiles()
 
     def build_menu_bar(self) -> None:
         """Create profile actions and placeholder application menus."""
 
         file_menu = self.menuBar().addMenu("File")
-        open_profile_action = file_menu.addAction("Open Profile…")
+        open_profile_action = file_menu.addAction("Import Profile…")
         open_profile_action.triggered.connect(self.open_profile_dialog)
         save_profile_action = file_menu.addAction("Save Profile")
         save_profile_action.triggered.connect(self.save_profile_dialog)
@@ -372,7 +405,8 @@ class LayerEditor(QMainWindow):
         assignment_layout.addWidget(QLabel("Assignment"))
         self.assignment_combo = QComboBox()
         self.assignment_combo.addItem("No assignment", None)
-        self.assignment_combo.addItem("Open Spotify", "Open Spotify")
+        for action_id, label in WINDOW_ACTION_LABELS.items():
+            self.assignment_combo.addItem(label, action_id)
         self.assignment_combo.currentIndexChanged.connect(
             self.assignment_selection_changed
         )
@@ -454,7 +488,9 @@ class LayerEditor(QMainWindow):
         self.inspector_action.setText(f"Action: {action}")
         self.inspector_trigger.setText(f"Trigger: {trigger}")
         index = self.assignment_combo.findData(assignment)
+        self.assignment_combo.blockSignals(True)
         self.assignment_combo.setCurrentIndex(max(index, 0))
+        self.assignment_combo.blockSignals(False)
         self.refresh_control_highlight()
 
     def save_assignment(self) -> None:
@@ -513,8 +549,8 @@ class LayerEditor(QMainWindow):
 
         if assignment is None:
             return fallback
-        if assignment == "Open Spotify":
-            return assignment
+        if assignment in WINDOW_ACTION_LABELS:
+            return WINDOW_ACTION_LABELS[assignment]
         if assignment.startswith("script:"):
             script_id = assignment.removeprefix("script:")
             script = self.script_by_id(script_id)
@@ -524,12 +560,12 @@ class LayerEditor(QMainWindow):
     def current_layer_path(self) -> tuple[str, ...]:
         """Return the path represented by the current layer view.
 
-        The root view represents the Global fallback and therefore uses an
-        empty path. Non-global assignments use paths such as
-        ``("Maya", "Modeling")``.
+        The selected layer is the assignment scope. This is independent from
+        the navigation path so a top-level layer can be edited without
+        opening it.
         """
 
-        return tuple(layer.name for layer in self.layer_service.navigation_stack)
+        return self.editing_layer_path
 
     def active_layer_path(self) -> tuple[str, ...]:
         """Return the active layer path used by the runtime prototype."""
@@ -560,7 +596,8 @@ class LayerEditor(QMainWindow):
         self.assignment_combo.blockSignals(True)
         self.assignment_combo.clear()
         self.assignment_combo.addItem("No assignment", None)
-        self.assignment_combo.addItem("Open Spotify", "Open Spotify")
+        for action_id, label in WINDOW_ACTION_LABELS.items():
+            self.assignment_combo.addItem(label, action_id)
         for script in self.profile.scripts:
             self.assignment_combo.addItem(
                 f"Script: {script.name}",
@@ -882,6 +919,8 @@ class LayerEditor(QMainWindow):
         step = {"K1-CW": 1, "K1-CCW": -1}.get(event.control)
         if event.control == "K2-PRESS":
             if self.runtime.mode == RuntimeMode.DRY_RUN:
+                self.layer_service.set_global_active()
+                self.refresh_tree()
                 self.record_runtime_history("K2-PRESS → Global — dry run")
                 return True
             self.layer_service.set_global_active()
@@ -889,19 +928,34 @@ class LayerEditor(QMainWindow):
             self.record_runtime_history("K2-PRESS → Global — active")
             return True
         if step is None:
-            return False
-
-        if self.runtime.mode == RuntimeMode.DRY_RUN:
-            direction = "next" if step > 0 else "previous"
-            self.record_runtime_history(
-                f"{event.control} → {direction} layer — dry run"
+            if event.control != "K1-PRESS":
+                return False
+            was_back_selected = self.layer_service.selected_back
+            layer = self.layer_service.open_selected_layer()
+            self.editing_layer_path = tuple(
+                current.name for current in self.layer_service.navigation_stack
             )
+            self.refresh_tree()
+            if was_back_selected:
+                active_name = self.layer_path_label(self.active_layer_path())
+                self.record_runtime_history(f"K1-PRESS → {active_name} — active")
+            elif layer is None:
+                self.record_runtime_history("K1-PRESS → no layer selected")
+            else:
+                self.record_runtime_history(
+                    f"K1-PRESS → {layer.name} — active"
+                )
             return True
 
-        layer = self.layer_service.cycle_active(step)
+        layer = self.layer_service.cycle_selected(step)
+        self.editing_layer_path = tuple(self.layer_service.active_path())
         self.refresh_tree()
-        active_name = "/".join(self.active_layer_path()) if layer else "Global"
-        self.record_runtime_history(f"{event.control} → {active_name} — active")
+        selected_name = (
+            ".."
+            if self.layer_service.selected_back
+            else layer.name if layer else "Global"
+        )
+        self.record_runtime_history(f"{event.control} → {selected_name} — active")
         return True
 
     def layer_path_label(self, layer_path: tuple[str, ...]) -> str:
@@ -929,11 +983,11 @@ class LayerEditor(QMainWindow):
 
         bindings: list[BindingDefinition] = []
         for (layer_path, control), assignment in self.ui_assignments.items():
-            if assignment == "Open Spotify":
+            if assignment in WINDOW_ACTION_LABELS:
                 bindings.append(
                     BindingDefinition(
                         control=control,
-                        action_id="open_spotify",
+                        action_id=assignment,
                         layer_path=list(layer_path),
                     )
                 )
@@ -960,6 +1014,7 @@ class LayerEditor(QMainWindow):
 
         roots = LayerTree.from_list(self.profile.layers).roots
         self.layer_service.replace_roots(roots)
+        self.editing_layer_path = ()
 
     def restore_profile_bindings(self) -> None:
         """Copy profile bindings into the UI assignment state."""
@@ -969,56 +1024,152 @@ class LayerEditor(QMainWindow):
             key = (tuple(binding.layer_path), binding.control)
             if binding.action_id == "run_script" and binding.script_id is not None:
                 self.ui_assignments[key] = f"script:{binding.script_id}"
-            elif binding.action_id == "open_spotify":
-                self.ui_assignments[key] = "Open Spotify"
+            elif binding.action_id in WINDOW_ACTION_LABELS:
+                self.ui_assignments[key] = binding.action_id
 
     def save_profile_as_dialog(self) -> None:
-        """Choose a path and save the current profile as JSON."""
+        """Export the top-level profiles to a user-selected directory."""
 
-        filename, _selected_filter = QFileDialog.getSaveFileName(
-            self,
-            "Save Input Bridge Profile",
-            str(
-                self.profile_path
-                or default_profile_directory() / "profile.input-bridge.json"
-            ),
-            "Input Bridge profiles (*.json);;All files (*.*)",
-        )
-        if filename:
-            self.profile_path = Path(filename)
-            self.save_profile()
-
-    def save_profile_dialog(self) -> None:
-        """Save the current profile, prompting for a path when necessary."""
-
-        if self.profile_path is None:
-            self.save_profile_as_dialog()
-        else:
-            self.save_profile()
-
-    def save_profile(self) -> None:
-        """Write the current UI profile to its selected JSON path."""
-
-        if self.profile_path is None:
+        if not self.validate_layer_names_for_save():
             return
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Export Input Bridge Profiles",
+            str(default_profile_directory()),
+        )
+        if not directory:
+            return
+
         self.save_current_assignment()
         self.sync_profile_layers()
         self.sync_profile_bindings()
+        self.write_profile_set(Path(directory), confirm_overwrite=True)
+
+    def save_profile_dialog(self) -> None:
+        """Save the current profile to the canonical profile path."""
+
+        self.save_profile()
+
+    def save_profile(self) -> None:
+        """Write the current UI profile to the canonical JSON path."""
+
+        if not self.validate_layer_names_for_save():
+            return
+        self.profile_path = default_profile_directory()
+        self.save_current_assignment()
+        self.sync_profile_layers()
+        self.sync_profile_bindings()
+        self.write_profile_set(self.profile_path, confirm_overwrite=True)
+
+    def write_profile_set(self, directory: Path, confirm_overwrite: bool) -> None:
+        """Write one profile file for each top-level layer."""
+
+        profile_documents = self.profile_documents_by_root()
+        targets = [
+            directory / f"{self.profile_filename(name)}.input-bridge.json"
+            for name, _profile in profile_documents
+        ]
+        existing_targets = [path for path in targets if path.exists()]
+        if confirm_overwrite and existing_targets:
+            listed_targets = "\n".join(str(path) for path in existing_targets)
+            answer = QMessageBox.question(
+                self,
+                "Replace existing profiles?",
+                f"These profile files already exist:\n{listed_targets}\n\n"
+                "Do you want to replace it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
         try:
-            self.profile_path.parent.mkdir(parents=True, exist_ok=True)
-            save_profile(self.profile, self.profile_path)
+            directory.mkdir(parents=True, exist_ok=True)
+            for (_name, profile), path in zip(profile_documents, targets):
+                save_profile(profile, path)
         except OSError as error:
             QMessageBox.warning(self, "Profile not saved", str(error))
             return
-        self.statusBar().showMessage(f"Profile saved: {self.profile_path}", 3000)
+        self.statusBar().showMessage(
+            f"Saved {len(profile_documents)} profiles to {directory}",
+            3000,
+        )
+
+    def validate_layer_names_for_save(self) -> bool:
+        """Require generated layer names to be replaced before saving."""
+
+        generated_names: list[str] = []
+
+        def collect(layers: list[Layer], parents: tuple[str, ...] = ()) -> None:
+            for layer in layers:
+                path = (*parents, layer.name)
+                if (
+                    layer.name.casefold() != "global"
+                    and re.fullmatch(r"layer\d+", layer.name.strip(), re.IGNORECASE)
+                ):
+                    generated_names.append("/".join(path))
+                collect(layer.children, path)
+
+        collect(self.layer_service.backend.roots())
+        if not generated_names:
+            return True
+
+        QMessageBox.warning(
+            self,
+            "Rename layers before saving",
+            "Rename these generated layers before saving a profile:\n"
+            + "\n".join(generated_names),
+        )
+        return False
+
+    def profile_documents_by_root(self) -> list[tuple[str, ProfileDocument]]:
+        """Build one portable profile document for each top-level layer."""
+
+        roots = self.layer_service.backend.roots()
+        documents: list[tuple[str, ProfileDocument]] = []
+        for root in roots:
+            root_name = root.name
+            if root_name.casefold() == "global":
+                bindings = [
+                    binding
+                    for binding in self.profile.bindings
+                    if not binding.layer_path
+                ]
+            else:
+                bindings = [
+                    binding
+                    for binding in self.profile.bindings
+                    if binding.layer_path
+                    and binding.layer_path[0].casefold() == root_name.casefold()
+                ]
+            documents.append(
+                (
+                    root_name,
+                    ProfileDocument(
+                        name=root_name,
+                        layers=[root.to_dict()],
+                        bindings=bindings,
+                        scripts=list(self.profile.scripts),
+                        connectors=list(self.profile.connectors),
+                    ),
+                )
+            )
+        return documents
+
+    @staticmethod
+    def profile_filename(layer_name: str) -> str:
+        """Return a safe, stable filename stem for a top-level layer."""
+
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "-", layer_name.strip()).strip(" .-")
+        return (stem or "layer").casefold()
 
     def open_profile_dialog(self) -> None:
         """Choose and load a JSON profile into the editor."""
 
         filename, _selected_filter = QFileDialog.getOpenFileName(
             self,
-            "Open Input Bridge Profile",
-            str(self.profile_path or default_profile_directory()),
+            "Import Input Bridge Profile",
+            str(default_profile_directory()),
             "Input Bridge profiles (*.json);;All files (*.*)",
         )
         if filename:
@@ -1041,6 +1192,82 @@ class LayerEditor(QMainWindow):
         if self.selected_control_name is not None:
             self.select_control(self.selected_control_name)
         self.statusBar().showMessage(f"Profile loaded: {path}", 3000)
+
+    def load_startup_profiles(self) -> None:
+        """Load and merge every profile from the canonical profile directory."""
+
+        profile_paths = sorted(default_profile_directory().glob("*.input-bridge.json"))
+        if not profile_paths:
+            return
+
+        roots: list[Layer] = [Layer("Global", locked=True)]
+        bindings: list[BindingDefinition] = []
+        scripts: list[ScriptDefinition] = []
+        connectors = []
+        seen_root_names = {"global"}
+        seen_binding_keys: set[tuple[object, ...]] = set()
+        seen_script_ids: set[str] = set()
+        seen_connector_ids: set[str] = set()
+        failures: list[str] = []
+
+        for path in profile_paths:
+            try:
+                profile = load_profile(path)
+            except (OSError, TypeError, ValueError) as error:
+                failures.append(f"{path.name}: {error}")
+                continue
+
+            for root in LayerTree.from_list(profile.layers).roots:
+                if root.name.casefold() == "global":
+                    continue
+                if root.name.casefold() not in seen_root_names:
+                    roots.append(root)
+                    seen_root_names.add(root.name.casefold())
+
+            for binding in profile.bindings:
+                key = (
+                    binding.control,
+                    binding.action_id,
+                    binding.executor,
+                    tuple(binding.layer_path),
+                    binding.trigger,
+                    binding.script_id,
+                )
+                if key not in seen_binding_keys:
+                    bindings.append(binding)
+                    seen_binding_keys.add(key)
+
+            for script in profile.scripts:
+                if script.script_id not in seen_script_ids:
+                    scripts.append(script)
+                    seen_script_ids.add(script.script_id)
+
+            for connector in profile.connectors:
+                if connector.connector_id not in seen_connector_ids:
+                    connectors.append(connector)
+                    seen_connector_ids.add(connector.connector_id)
+
+        self.profile = ProfileDocument(
+            name="Input Bridge",
+            layers=[root.to_dict() for root in roots],
+            bindings=bindings,
+            scripts=scripts,
+            connectors=connectors,
+        )
+        self.profile_path = default_profile_directory()
+        self.runtime.profile = self.profile
+        self.layer_service.replace_roots(roots)
+        self.editing_layer_path = ()
+        self.restore_profile_bindings()
+        self.refresh_tree()
+        self.refresh_control_labels()
+
+        if failures:
+            QMessageBox.warning(
+                self,
+                "Some profiles could not be loaded",
+                "\n".join(failures),
+            )
 
     def refresh_control_labels(self) -> None:
         """Show the current assignment on each control button."""
@@ -1067,9 +1294,41 @@ class LayerEditor(QMainWindow):
 
         self.tree_widget.clear()
         visible_layers = self.layer_service.visible_layers()
+        if self.layer_service.current_layer() is None:
+            global_layer = next(
+                (
+                    layer
+                    for layer in self.layer_service.backend.roots()
+                    if layer.name.casefold() == "global"
+                ),
+                None,
+            )
+            if global_layer is not None:
+                global_item = QTreeWidgetItem(["Global"])
+                global_item.setData(0, Qt.ItemDataRole.UserRole, global_layer)
+                global_item.setToolTip(
+                    0,
+                    "Global bindings apply when no active layer overrides them.",
+                )
+                global_item.setFlags(
+                    global_item.flags() & ~Qt.ItemFlag.ItemIsEditable
+                )
+                font = global_item.font(0)
+                is_global_active = (
+                    self.layer_service.active_layer is None
+                    and self.layer_service.selected_layer is global_layer
+                )
+                font.setBold(is_global_active)
+                font.setUnderline(self.layer_service.selected_layer is global_layer)
+                global_item.setFont(0, font)
+                self.tree_widget.addTopLevelItem(global_item)
         if self.layer_service.current_layer() is not None:
             parent_item = QTreeWidgetItem([".."])
             parent_item.setData(0, Qt.ItemDataRole.UserRole, "__parent__")
+            if self.layer_service.selected_back:
+                font = parent_item.font(0)
+                font.setUnderline(True)
+                parent_item.setFont(0, font)
             self.tree_widget.addTopLevelItem(parent_item)
         for layer in visible_layers:
             self.add_layer_item(None, layer)
@@ -1083,6 +1342,7 @@ class LayerEditor(QMainWindow):
         active_name = "/".join(active_path) if active_path else "Global"
         self.editing_label.setText(f"Editing layer: {editing_name}")
         self.active_label.setText(f"Runtime active layer: {active_name}")
+        self.refresh_layer_item_styles()
         self.refresh_control_labels()
         if self.selected_control_name is not None:
             self.select_control(self.selected_control_name)
@@ -1142,9 +1402,13 @@ class LayerEditor(QMainWindow):
 
         item = QTreeWidgetItem([layer.name])
         item.setData(0, Qt.ItemDataRole.UserRole, layer)
-        if layer is self.layer_service.active_layer:
+        if (
+            layer is self.layer_service.active_layer
+            or layer is self.layer_service.selected_layer
+        ):
             font = item.font(0)
-            font.setBold(True)
+            font.setBold(layer is self.layer_service.active_layer)
+            font.setUnderline(layer is self.layer_service.selected_layer)
             item.setFont(0, font)
         if not layer.locked:
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
@@ -1152,6 +1416,28 @@ class LayerEditor(QMainWindow):
             self.tree_widget.addTopLevelItem(item)
         else:
             parent_item.addChild(item)
+
+    def refresh_layer_item_styles(self) -> None:
+        """Update active and selected styling without rebuilding the tree."""
+
+        for index in range(self.tree_widget.topLevelItemCount()):
+            item = self.tree_widget.topLevelItem(index)
+            value = item.data(0, Qt.ItemDataRole.UserRole)
+            font = item.font(0)
+            if value == "__parent__":
+                font.setBold(False)
+                font.setUnderline(self.layer_service.selected_back)
+            elif isinstance(value, Layer):
+                is_global_active = (
+                    value.name.casefold() == "global"
+                    and self.layer_service.active_layer is None
+                    and self.layer_service.selected_layer is value
+                )
+                font.setBold(
+                    value is self.layer_service.active_layer or is_global_active
+                )
+                font.setUnderline(value is self.layer_service.selected_layer)
+            item.setFont(0, font)
 
     def enter_layer(self, item: QTreeWidgetItem, _column: int) -> None:
         """Enter the layer represented by a double-clicked tree item."""
@@ -1163,8 +1449,44 @@ class LayerEditor(QMainWindow):
         layer = item.data(0, Qt.ItemDataRole.UserRole)
         if not isinstance(layer, Layer) or layer.locked:
             return
+        self.editing_layer_path = tuple(
+            current.name for current in self.layer_service.navigation_stack
+        ) + (layer.name,)
         self.layer_service.enter(layer)
         self.refresh_tree()
+
+    def select_layer_item(self, item: QTreeWidgetItem, _column: int) -> None:
+        """Select a layer as the assignment scope without opening it."""
+
+        if item.data(0, Qt.ItemDataRole.UserRole) == "__parent__":
+            self.layer_service.select_back()
+            font = item.font(0)
+            font.setUnderline(True)
+            item.setFont(0, font)
+            return
+
+        layer = item.data(0, Qt.ItemDataRole.UserRole)
+        if not isinstance(layer, Layer):
+            return
+        if layer.name.casefold() == "global":
+            self.layer_service.set_global_active()
+            self.editing_layer_path = ()
+        elif layer.locked:
+            return
+        else:
+            self.layer_service.set_active(layer)
+            self.editing_layer_path = tuple(
+                current.name for current in self.layer_service.navigation_stack
+            ) + (layer.name,)
+
+        editing_name = "/".join(self.editing_layer_path) or "Global"
+        active_name = "/".join(self.active_layer_path()) or "Global"
+        self.editing_label.setText(f"Editing layer: {editing_name}")
+        self.active_label.setText(f"Runtime active layer: {active_name}")
+        self.refresh_layer_item_styles()
+        self.refresh_control_labels()
+        if self.selected_control_name is not None:
+            self.select_control(self.selected_control_name)
 
     def go_back(self) -> None:
         """Return to the parent layer view."""
@@ -1218,7 +1540,7 @@ class LayerEditor(QMainWindow):
         """Validate and store a layer name edited in the tree."""
 
         layer = item.data(0, Qt.ItemDataRole.UserRole)
-        if not isinstance(layer, Layer):
+        if not isinstance(layer, Layer) or layer.locked:
             return
         try:
             layer.rename(item.text(0), self.layer_service.visible_layers())
@@ -1227,18 +1549,6 @@ class LayerEditor(QMainWindow):
             self.refresh_tree()
         else:
             self.refresh_path()
-
-    def set_active(self) -> None:
-        """Mark the selected layer as active in the UI."""
-
-        layer = self.selected_layer()
-        if layer is None:
-            return
-        self.layer_service.set_active(layer)
-        active_path = self.active_layer_path()
-        active_name = "/".join(active_path) if active_path else "Global"
-        self.active_label.setText(f"Runtime active layer: {active_name}")
-
 
 def main() -> int:
     """Run the layer editor application."""

@@ -38,12 +38,22 @@ class LayerService:
         self.backend = backend
         self.navigation_stack: list[Layer] = []
         self.active_layer: Layer | None = None
+        self.selected_layer: Layer | None = None
+        self.selected_back = False
 
     def visible_layers(self) -> list[Layer]:
         """Return the layers visible at the current navigation level."""
 
         if not self.navigation_stack:
-            return self.backend.roots()
+            # Global is the reserved empty-path fallback scope.  It is edited
+            # from the root view, but it is not itself a navigable application
+            # layer.  Keeping it out of this list prevents a root application
+            # layer from being mistaken for a global assignment in the UI.
+            return [
+                layer
+                for layer in self.backend.roots()
+                if layer.name.casefold() != "global"
+            ]
         return self.navigation_stack[-1].children
 
     def path(self) -> list[str]:
@@ -84,11 +94,101 @@ class LayerService:
         """Set the active layer without knowing how the UI represents it."""
 
         self.active_layer = layer
+        self.selected_layer = layer
+        self.selected_back = False
 
     def set_global_active(self) -> None:
         """Select the Global fallback layer."""
 
         self.active_layer = None
+        self.selected_layer = self._global_layer()
+        self.selected_back = False
+
+    def select_back(self) -> None:
+        """Select the parent navigation target for K1."""
+
+        if self.navigation_stack:
+            self.selected_back = True
+            self.selected_layer = None
+
+    def cycle_selected(self, step: int) -> Layer | None:
+        """Move the pending layer selection without activating it.
+
+        Parameters
+        ----------
+        step : int
+            Direction and distance to move. Positive values move forward;
+            negative values move backward.
+
+        Returns
+        -------
+        Layer or None
+            The newly selected layer, or ``None`` when no selectable layers
+            exist.
+        """
+
+        if step == 0:
+            return self.selected_layer
+
+        layers = self._cycle_layers()
+        if self.navigation_stack:
+            target_count = len(layers) + 1  # ``..`` plus child layers.
+            if self.selected_back:
+                index = 0
+            elif self.selected_layer in layers:
+                index = layers.index(self.selected_layer) + 1
+            else:
+                index = 0
+            index = (index + step) % target_count
+            if index == 0:
+                self.selected_layer = None
+                self.selected_back = True
+                return None
+            self.selected_layer = layers[index - 1]
+        else:
+            if not layers:
+                self.selected_layer = None
+                return None
+            if self.selected_back:
+                index = 0 if step > 0 else len(layers) - 1
+            elif self.selected_layer not in layers:
+                global_layer = self._global_layer()
+                if global_layer in layers:
+                    index = (layers.index(global_layer) + step) % len(layers)
+                else:
+                    index = 0 if step > 0 else len(layers) - 1
+            else:
+                index = (layers.index(self.selected_layer) + step) % len(layers)
+            self.selected_layer = layers[index]
+        self.selected_back = False
+        if self.selected_layer is self._global_layer():
+            self.active_layer = None
+        else:
+            self.active_layer = self.selected_layer
+        return self.selected_layer
+
+    def open_selected_layer(self) -> Layer | None:
+        """Activate the layer currently selected by the K1 encoder."""
+
+        if self.selected_back and self.navigation_stack:
+            self.navigation_stack.pop()
+            parent = self.navigation_stack[-1] if self.navigation_stack else None
+            self.selected_back = False
+            if parent is None:
+                self.set_global_active()
+            else:
+                self.set_active(parent)
+            return parent
+
+        if self.selected_layer not in self._cycle_layers():
+            return None
+        if self.selected_layer is self._global_layer():
+            self.set_global_active()
+            self.navigation_stack = []
+            return self.selected_layer
+        self.active_layer = self.selected_layer
+        self.navigation_stack = self._layer_path(self.active_layer)
+        return self.active_layer
 
     def cycle_active(self, step: int) -> Layer | None:
         """Move the active layer through non-Global layers.
@@ -109,15 +209,7 @@ class LayerService:
         if step == 0:
             return self.active_layer
 
-        layers: list[Layer] = []
-
-        def collect(items: list[Layer]) -> None:
-            for layer in items:
-                if not layer.locked:
-                    layers.append(layer)
-                    collect(layer.children)
-
-        collect(self.backend.roots())
+        layers = self._selectable_layers()
         if not layers:
             self.set_global_active()
             return None
@@ -162,3 +254,64 @@ class LayerService:
         self.backend.replace_roots(roots)
         self.navigation_stack = []
         self.active_layer = None
+        self.selected_layer = None
+        self.selected_back = False
+
+    def _selectable_layers(self) -> list[Layer]:
+        """Return unlocked layers in deterministic depth-first order."""
+
+        layers: list[Layer] = []
+
+        def collect(items: list[Layer]) -> None:
+            for layer in items:
+                if not layer.locked:
+                    layers.append(layer)
+                    collect(layer.children)
+
+        collect(self.backend.roots())
+        return layers
+
+    def _global_layer(self) -> Layer | None:
+        """Return the reserved Global layer, if the backend contains it."""
+
+        return next(
+            (
+                layer
+                for layer in self.backend.roots()
+                if layer.name.casefold() == "global"
+            ),
+            None,
+        )
+
+    def _cycle_layers(self) -> list[Layer]:
+        """Return the current-level targets available to K1 navigation."""
+
+        if self.navigation_stack:
+            return [
+                layer
+                for layer in self.navigation_stack[-1].children
+                if not layer.locked
+            ]
+
+        global_layer = self._global_layer()
+        root_layers = [
+            layer
+            for layer in self.backend.roots()
+            if not layer.locked and layer.name.casefold() != "global"
+        ]
+        return ([global_layer] if global_layer is not None else []) + root_layers
+
+    def _layer_path(self, target: Layer) -> list[Layer]:
+        """Return the object path from a root to ``target``."""
+
+        def find_path(items: list[Layer], parents: list[Layer]) -> list[Layer] | None:
+            for layer in items:
+                path = [*parents, layer]
+                if layer is target:
+                    return path
+                result = find_path(layer.children, path)
+                if result is not None:
+                    return result
+            return None
+
+        return find_path(self.backend.roots(), []) or []
