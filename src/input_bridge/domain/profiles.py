@@ -30,6 +30,7 @@ class BindingDefinition:
     layer_path: list[str] = field(default_factory=list)
     trigger: str = "press"
     script_id: str | None = None
+    command_name: str | None = None
 
 
 @dataclass

@@ -27,6 +27,7 @@ class ProfileDocumentTests(unittest.TestCase):
                     action_id="run_script",
                     layer_path=["Global", "Modeling"],
                     script_id="open_spotify",
+                    command_name="Open Spotify",
                 )
             ],
             scripts=[
@@ -47,6 +48,21 @@ class ProfileDocumentTests(unittest.TestCase):
 
         loaded = ProfileDocument.from_dict(profile.to_dict())
         self.assertEqual(loaded, profile)
+
+    def test_binding_command_name_is_optional(self) -> None:
+        profile = ProfileDocument(
+            name="Test",
+            bindings=[
+                BindingDefinition(
+                    control="R1C1",
+                    action_id="open_notepad",
+                )
+            ],
+        )
+
+        loaded = ProfileDocument.from_dict(profile.to_dict())
+
+        self.assertIsNone(loaded.bindings[0].command_name)
 
     def test_missing_or_unknown_schema_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "schema version"):
