@@ -169,6 +169,28 @@ The project intentionally keeps action execution separate from the device.
 The device is used as an input source; scripts and host actions remain in the
 profile and run on the computer.
 
+## Spotify layer
+
+`spotify.input-bridge.json` is a ready-made profile with a `Spotify` layer.
+Install the optional Spotify dependency with `uv sync --extra spotify`, then
+copy the profile into `%LOCALAPPDATA%\InputBridge\profiles`, import it in the
+layer editor, select the Spotify layer as active, and enable Execute Actions
+only when you are ready to control playback. Users who do not use Spotify can
+run the normal `uv sync` without installing Spotipy.
+
+The profile stores the Spotipy Python source directly in its `scripts` section;
+there is no Spotify integration module inside Input Bridge. Spotify scripts use
+Spotipy's PKCE OAuth flow. Register `http://127.0.0.1:8888/callback` exactly
+in the Spotify application settings. On the first Spotify control, Input
+Bridge prompts for the Client ID, stores that non-secret value under
+`%LOCALAPPDATA%\InputBridge`, and opens a browser for consent. No client
+secret or environment variables are required.
+
+The sample maps R1C1–R1C4 to open, previous, play/pause, and next; R2C1–R2C4
+to volume down, volume up, shuffle, and repeat; and K2 clockwise/counter-
+clockwise turns to volume up/down. Spotify playback control requires an active
+device and a Spotify Premium account.
+
 ## Development
 
 Run the test suite and checks with:

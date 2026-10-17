@@ -8,6 +8,11 @@ dependencies = [
     "pyside6>=6.11.2",
 ]
 
+[project.optional-dependencies]
+spotify = [
+    "spotipy>=2.25.1",
+]
+
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"

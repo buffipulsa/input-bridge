@@ -171,8 +171,17 @@ def execute_profile_action(
     if script is None:
         raise LookupError(f"script {binding.script_id!r} was not found")
 
-    subprocess.run(
+    environment = os.environ.copy()
+    environment["INPUT_BRIDGE_ACTION_ID"] = binding.action_id
+    environment["INPUT_BRIDGE_CONTROL"] = logical_event
+    completed = subprocess.run(
         [sys.executable, "-c", script.source],
-        check=True,
         shell=False,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
     )
+    if completed.returncode:
+        detail = (completed.stderr or completed.stdout).strip()
+        raise RuntimeError(detail or f"script exited with code {completed.returncode}")
