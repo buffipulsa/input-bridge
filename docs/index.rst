@@ -14,6 +14,7 @@ protocol notes.
    api
    protocol-951
    profile-format
+   integrations
 
 Indices and tables
 ==================
