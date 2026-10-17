@@ -11,7 +11,7 @@ from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, Qt, Signal
+from PySide6.QtCore import QObject, QPoint, QSettings, Qt, Signal
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -56,6 +56,10 @@ from ..domain.profiles import (
 )
 from ..infrastructure.memory_layer_backend import InMemoryLayerBackend
 from ..infrastructure.observe_raw_input import RawInputEventSource
+from .layer_notification import (
+    LayerNotification,
+    LayerNotificationPreferencesDialog,
+)
 from .style import application_stylesheet
 
 GLOBAL_PLACEHOLDER_ACTIONS = {
@@ -168,6 +172,8 @@ class LayerEditor(QMainWindow):
         super().__init__()
         self.setWindowTitle("Input Bridge — Layers")
         self.resize(1240, 760)
+        self.settings = QSettings("InputBridge", "LayerEditor")
+        self.layer_notification = LayerNotification(self.settings)
         self.build_menu_bar()
 
         self.layer_service = layer_service or LayerService(InMemoryLayerBackend())
@@ -311,7 +317,10 @@ class LayerEditor(QMainWindow):
         exit_action = file_menu.addAction("Exit")
         exit_action.triggered.connect(self.close)
 
-        for menu_name in ("Edit", "View", "Help"):
+        edit_menu = self.menuBar().addMenu("Edit")
+        preferences_action = edit_menu.addAction("Preferences…")
+        preferences_action.triggered.connect(self.open_preferences_dialog)
+        for menu_name in ("View", "Help"):
             menu = self.menuBar().addMenu(menu_name)
             placeholder = menu.addAction("Coming soon")
             placeholder.setEnabled(False)
@@ -945,6 +954,10 @@ class LayerEditor(QMainWindow):
                 self.record_runtime_history(
                     f"K1-PRESS → {layer.name} — active"
                 )
+            if was_back_selected or layer is not None:
+                self.show_layer_notification(
+                    self.layer_path_label(self.active_layer_path())
+                )
             return True
 
         layer = self.layer_service.cycle_selected(step)
@@ -956,6 +969,7 @@ class LayerEditor(QMainWindow):
             else layer.name if layer else "Global"
         )
         self.record_runtime_history(f"{event.control} → {selected_name} — active")
+        self.show_layer_notification(self.layer_path_label(self.active_layer_path()))
         return True
 
     def layer_path_label(self, layer_path: tuple[str, ...]) -> str:
@@ -971,11 +985,25 @@ class LayerEditor(QMainWindow):
         while self.runtime_history.count() > 50:
             self.runtime_history.takeItem(self.runtime_history.count() - 1)
 
+    def show_layer_notification(self, layer_path: str) -> None:
+        """Show the current active layer in the transient overlay."""
+
+        if self.isActiveWindow():
+            return
+        self.layer_notification.show_layer(layer_path)
+
+    def open_preferences_dialog(self) -> None:
+        """Open the editor preferences dialog."""
+
+        dialog = LayerNotificationPreferencesDialog(self.settings, self)
+        dialog.exec()
+
     def closeEvent(self, event: QCloseEvent) -> None:
         """Stop input and release the background action executor."""
 
         self.runtime.stop()
         self.action_executor.shutdown()
+        self.layer_notification.close()
         super().closeEvent(event)
 
     def sync_profile_bindings(self) -> None:
