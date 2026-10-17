@@ -180,6 +180,7 @@ class LayerEditor(QMainWindow):
         self.selected_control_name: str | None = None
         self.editing_layer_path: tuple[str, ...] = ()
         self.ui_assignments: dict[tuple[tuple[str, ...], str], str] = {}
+        self.ui_command_names: dict[tuple[tuple[str, ...], str], str] = {}
         self.profile = ProfileDocument(name="Untitled")
         self.profile_path: Path = default_profile_path()
         self.selected_script_id: str | None = None
@@ -421,6 +422,18 @@ class LayerEditor(QMainWindow):
         )
         assignment_layout.addWidget(self.assignment_combo)
 
+        assignment_layout.addWidget(
+            QLabel("Command name (shown when hovering the button)")
+        )
+        self.command_name_edit = QLineEdit()
+        self.command_name_edit.setPlaceholderText(
+            "Optional, e.g. Previous track"
+        )
+        self.command_name_edit.setToolTip(
+            "A per-button name for the command. The script or action can be shared."
+        )
+        assignment_layout.addWidget(self.command_name_edit)
+
         save_assignment_button = QPushButton("Save Assignment")
         save_assignment_button.clicked.connect(self.save_assignment)
         assignment_layout.addWidget(save_assignment_button)
@@ -500,6 +513,9 @@ class LayerEditor(QMainWindow):
         self.assignment_combo.blockSignals(True)
         self.assignment_combo.setCurrentIndex(max(index, 0))
         self.assignment_combo.blockSignals(False)
+        self.command_name_edit.setText(
+            self.ui_command_names.get(self.assignment_key(control), "")
+        )
         self.refresh_control_highlight()
 
     def save_assignment(self) -> None:
@@ -524,8 +540,14 @@ class LayerEditor(QMainWindow):
         key = self.assignment_key(self.selected_control_name)
         if assignment is None:
             self.ui_assignments.pop(key, None)
+            self.ui_command_names.pop(key, None)
         else:
             self.ui_assignments[key] = str(assignment)
+            command_name = self.command_name_edit.text().strip()
+            if command_name:
+                self.ui_command_names[key] = command_name
+            else:
+                self.ui_command_names.pop(key, None)
         self.refresh_control_labels()
 
     def assign_selected_script(self) -> None:
@@ -1011,12 +1033,14 @@ class LayerEditor(QMainWindow):
 
         bindings: list[BindingDefinition] = []
         for (layer_path, control), assignment in self.ui_assignments.items():
+            command_name = self.ui_command_names.get((layer_path, control))
             if assignment in WINDOW_ACTION_LABELS:
                 bindings.append(
                     BindingDefinition(
                         control=control,
                         action_id=assignment,
                         layer_path=list(layer_path),
+                        command_name=command_name,
                     )
                 )
             elif assignment.startswith("script:"):
@@ -1026,6 +1050,7 @@ class LayerEditor(QMainWindow):
                         action_id="run_script",
                         layer_path=list(layer_path),
                         script_id=assignment.removeprefix("script:"),
+                        command_name=command_name,
                     )
                 )
         self.profile.bindings = bindings
@@ -1048,8 +1073,11 @@ class LayerEditor(QMainWindow):
         """Copy profile bindings into the UI assignment state."""
 
         self.ui_assignments = {}
+        self.ui_command_names = {}
         for binding in self.profile.bindings:
             key = (tuple(binding.layer_path), binding.control)
+            if binding.command_name:
+                self.ui_command_names[key] = binding.command_name
             if binding.action_id == "run_script" and binding.script_id is not None:
                 self.ui_assignments[key] = f"script:{binding.script_id}"
             elif binding.action_id in WINDOW_ACTION_LABELS:
@@ -1300,10 +1328,23 @@ class LayerEditor(QMainWindow):
     def refresh_control_labels(self) -> None:
         """Show the current assignment on each control button."""
 
+        layer_name = self.layer_path_label(self.current_layer_path())
         for control, button in self.control_buttons.items():
-            assignment = self.ui_assignments.get(self.assignment_key(control))
+            key = self.assignment_key(control)
+            assignment = self.ui_assignments.get(key)
             label = self.assignment_label(assignment, "No assignment")
-            button.setText(f"{control}\n{label}")
+            command_name = self.ui_command_names.get(key)
+            command_line = command_name or label
+            button.setText(f"{control}\n{command_line}")
+            action_line = (
+                f"Action: {label}\n" if command_name and command_name != label else ""
+            )
+            button.setToolTip(
+                f"Control: {control}\n"
+                f"Layer: {layer_name}\n"
+                f"Command: {command_line}\n"
+                f"{action_line}"
+            )
 
     def refresh_control_highlight(self) -> None:
         """Highlight the currently selected control with a blue border."""

@@ -18,7 +18,8 @@ The current schema version is `1`.
       "executor": "maya",
       "layer_path": ["Maya", "Modeling"],
       "trigger": "press",
-      "script_id": null
+      "script_id": null,
+      "command_name": "Create parent constraint"
     }
   ],
   "scripts": [],
@@ -34,7 +35,9 @@ The current schema version is `1`.
 ```
 
 Profiles contain references and source text, not machine-specific paths or
-credentials. Import must validate the schema and show included executable
+credentials. ``command_name`` is an optional human-readable name shown in the
+editor for a specific button binding; it does not change the underlying
+action. Import must validate the schema and show included executable
 content before anything is enabled or run. Loading a profile never executes
 its scripts.
 
