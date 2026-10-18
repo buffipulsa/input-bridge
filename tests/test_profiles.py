@@ -140,6 +140,23 @@ class ProfileDocumentTests(unittest.TestCase):
             "Unassigned",
         )
 
+    def test_describe_profile_action_prefers_command_name(self) -> None:
+        profile = ProfileDocument(
+            name="Test",
+            bindings=[
+                BindingDefinition(
+                    control="R1C1",
+                    action_id="open_file_explorer",
+                    command_name="Open project folder",
+                )
+            ],
+        )
+
+        self.assertEqual(
+            describe_profile_action("R1C1", profile),
+            "Open project folder",
+        )
+
     def test_describe_profile_action_reports_missing_script(self) -> None:
         profile = ProfileDocument(
             name="Test",

@@ -525,6 +525,10 @@ class LayerEditor(QMainWindow):
         self.runtime_event_label.setText(
             f"Last event: {event.control} ({event.trigger}) → {description}"
         )
+        self.show_layer_notification(
+            self.layer_path_label(active_layer_path),
+            description,
+        )
         if description == "Unassigned":
             self.record_runtime_history(
                 f"{event.control} ({event.trigger}) "
@@ -597,10 +601,18 @@ class LayerEditor(QMainWindow):
                 self.layer_service.set_global_active()
                 self.refresh_tree()
                 self.record_runtime_history("K2-PRESS → Global — dry run")
+                self.show_layer_notification(
+                    self.layer_path_label(self.active_layer_path()),
+                    "Return to Global",
+                )
                 return True
             self.layer_service.set_global_active()
             self.refresh_tree()
             self.record_runtime_history("K2-PRESS → Global — active")
+            self.show_layer_notification(
+                self.layer_path_label(self.active_layer_path()),
+                "Return to Global",
+            )
             return True
         if step is None:
             if event.control != "K1-PRESS":
@@ -622,7 +634,13 @@ class LayerEditor(QMainWindow):
                 )
             if was_back_selected or layer is not None:
                 self.show_layer_notification(
-                    self.layer_path_label(self.active_layer_path())
+                    self.layer_path_label(self.active_layer_path()),
+                    "Open layer" if layer is not None else "Go back",
+                )
+            else:
+                self.show_layer_notification(
+                    self.layer_path_label(self.active_layer_path()),
+                    "Open layer",
                 )
             return True
 
@@ -635,7 +653,11 @@ class LayerEditor(QMainWindow):
             else layer.name if layer else "Global"
         )
         self.record_runtime_history(f"{event.control} → {selected_name} — active")
-        self.show_layer_notification(self.layer_path_label(self.active_layer_path()))
+        command = "Select next layer" if step > 0 else "Select previous layer"
+        self.show_layer_notification(
+            self.layer_path_label(self.active_layer_path()),
+            command,
+        )
         return True
 
     def layer_path_label(self, layer_path: tuple[str, ...]) -> str:
@@ -651,12 +673,12 @@ class LayerEditor(QMainWindow):
         while self.runtime_history.count() > 50:
             self.runtime_history.takeItem(self.runtime_history.count() - 1)
 
-    def show_layer_notification(self, layer_path: str) -> None:
-        """Show the current active layer in the transient overlay."""
+    def show_layer_notification(self, layer_path: str, command: str) -> None:
+        """Show the active layer and command in the transient overlay."""
 
         if self.isActiveWindow():
             return
-        self.layer_notification.show_layer(layer_path)
+        self.layer_notification.show_layer(layer_path, command)
 
     def open_preferences_dialog(self) -> None:
         """Open the editor preferences dialog."""

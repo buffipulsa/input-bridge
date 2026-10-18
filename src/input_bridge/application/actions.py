@@ -137,6 +137,8 @@ def describe_profile_action(
     )
     if binding is None:
         return "Unassigned"
+    if binding.command_name:
+        return binding.command_name
     if binding.action_id in WINDOW_ACTION_LABELS:
         return WINDOW_ACTION_LABELS[binding.action_id]
     if binding.action_id == "run_script":

@@ -1,4 +1,4 @@
-"""Transient on-screen feedback for active layer navigation."""
+"""Transient on-screen feedback for layer and control activity."""
 
 from __future__ import annotations
 
@@ -173,11 +173,11 @@ class LayerNotification(QWidget):
             """
         )
 
-    def show_layer(self, layer_path: str) -> None:
-        """Display ``layer_path`` and restart the fade timer."""
+    def show_layer(self, layer_path: str, command: str = "Unassigned") -> None:
+        """Display the active layer and submitted command."""
 
         preferences = load_layer_notification_preferences(self.settings)
-        self.label.setText(layer_path)
+        self.label.setText(f"{layer_path}\n{command}")
         self.adjustSize()
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         if screen is not None:
@@ -278,10 +278,10 @@ class LayerNotificationPreferencesDialog(QDialog):
         QMessageBox.information(
             self,
             "Layer notifications",
-            "Layer notifications briefly show the active layer when K1 changes "
-            "layers while the Input Bridge window is not focused. These settings "
-            "control where the notification appears and how long it remains "
-            "visible before fading out.",
+            "Layer notifications briefly show the active layer and submitted "
+            "command when a macropad control is pressed while the Input Bridge "
+            "window is not focused. These settings control where the notification "
+            "appears and how long it remains visible before fading out.",
         )
 
     def browse_codebase(self) -> None:
