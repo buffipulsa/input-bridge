@@ -1,8 +1,9 @@
 # Spotify integration
 
 The repository includes a ready-made profile at
-`examples/profiles/spotify.input-bridge.json` with a `Spotify` layer. It is an
-optional example integration, not a required part of Input Bridge.
+`examples/profiles/spotify.input-bridge.json` with a `Spotify` layer and the
+external script at `examples/code/spotify/controls.py`. It is an optional
+example integration, not a required part of Input Bridge.
 
 ## Install
 
@@ -21,14 +22,21 @@ Copy `examples/profiles/spotify.input-bridge.json` into:
 %LOCALAPPDATA%\InputBridge\profiles
 ```
 
+Copy the `examples/code/spotify` directory into the user codebase configured
+in Preferences. The default codebase is:
+
+```text
+%LOCALAPPDATA%\InputBridge\code
+```
+
 Import it in the layer editor, select the Spotify layer, and enable Execute
 Actions only when you are ready to control playback.
 
 ## Authentication
 
-The profile stores its Python source in the profile's `scripts` section; Input
-Bridge does not contain a Spotify integration module. The script uses
-Spotipy's PKCE OAuth flow.
+The profile references `spotify/controls.py`; Input Bridge does not contain a
+Spotify integration module. The script uses Spotipy's PKCE OAuth flow. You can
+edit the file in any Python IDE and reuse it from other profiles.
 
 Register this redirect URI in the Spotify application settings:
 
@@ -50,10 +58,8 @@ variable is required.
 | R1C2 | Previous track |
 | R1C3 | Play/Pause |
 | R1C4 | Next track |
-| R2C1 | Volume down |
-| R2C2 | Volume up |
-| R2C3 | Shuffle |
-| R2C4 | Repeat |
+| R2C1 | Shuffle |
+| R2C2 | Repeat |
 | K2-CW | Volume up |
 | K2-CCW | Volume down |
 

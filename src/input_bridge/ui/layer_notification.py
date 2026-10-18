@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from PySide6.QtCore import (
     QEasingCurve,
@@ -19,16 +21,44 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QSpinBox,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
+
+
+def default_codebase_directory() -> Path:
+    """Return the default user-owned directory for external scripts."""
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    base_directory = (
+        Path(local_app_data)
+        if local_app_data
+        else Path.home() / "AppData" / "Local"
+    )
+    return base_directory / "InputBridge" / "code"
+
+
+def load_codebase_directory(settings: QSettings) -> Path:
+    """Load the user-selected external script directory."""
+
+    configured = str(settings.value("scripts/codebase_directory", "")).strip()
+    return Path(configured).expanduser() if configured else default_codebase_directory()
+
+
+def save_codebase_directory(settings: QSettings, directory: Path) -> None:
+    """Persist the user-selected external script directory."""
+
+    settings.setValue("scripts/codebase_directory", str(directory))
+    settings.sync()
 
 
 @dataclass(frozen=True)
@@ -192,6 +222,18 @@ class LayerNotificationPreferencesDialog(QDialog):
         self.duration_spin.setSuffix(" ms")
         self.duration_spin.setValue(preferences.duration_ms)
 
+        self.codebase_edit = QLineEdit(str(load_codebase_directory(settings)))
+        self.codebase_edit.setToolTip(
+            "Folder containing user-authored Python scripts referenced by profiles."
+        )
+        browse_codebase_button = QToolButton()
+        browse_codebase_button.setText("…")
+        browse_codebase_button.setToolTip("Choose the user codebase folder.")
+        browse_codebase_button.clicked.connect(self.browse_codebase)
+        codebase_row = QHBoxLayout()
+        codebase_row.addWidget(self.codebase_edit)
+        codebase_row.addWidget(browse_codebase_button)
+
         section_title = QLabel("Layer notifications")
         section_title.setStyleSheet("font-weight: 600; font-size: 11pt;")
         help_button = QToolButton()
@@ -216,6 +258,7 @@ class LayerNotificationPreferencesDialog(QDialog):
         form = QFormLayout()
         form.addRow("Screen position", self.position_combo)
         form.addRow("Display duration", self.duration_spin)
+        form.addRow("User codebase", codebase_row)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -241,6 +284,17 @@ class LayerNotificationPreferencesDialog(QDialog):
             "visible before fading out.",
         )
 
+    def browse_codebase(self) -> None:
+        """Choose the directory used to resolve external profile scripts."""
+
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Choose Input Bridge codebase",
+            self.codebase_edit.text(),
+        )
+        if selected:
+            self.codebase_edit.setText(selected)
+
     def accept(self) -> None:
         """Save preferences before closing the dialog."""
 
@@ -250,5 +304,9 @@ class LayerNotificationPreferencesDialog(QDialog):
                 position=str(self.position_combo.currentData()),
                 duration_ms=self.duration_spin.value(),
             ),
+        )
+        save_codebase_directory(
+            self.settings,
+            Path(self.codebase_edit.text()).expanduser(),
         )
         super().accept()

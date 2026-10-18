@@ -34,12 +34,14 @@ The current schema version is `1`.
 }
 ```
 
-Profiles contain references and source text, not machine-specific paths or
-credentials. ``command_name`` is an optional human-readable name shown in the
-editor for a specific button binding; it does not change the underlying
-action. Import must validate the schema and show included executable
-content before anything is enabled or run. Loading a profile never executes
-its scripts.
+Profiles contain relative script references and legacy embedded source text,
+not machine-specific absolute paths or credentials. A script entry can use
+``path`` to reference a Python file relative to the user-selected codebase,
+for example ``spotify/controls.py``. ``command_name`` is an optional
+human-readable name shown in the editor for a specific button binding; it does
+not change the underlying action. Import must validate the schema and show
+included or referenced executable content before anything is enabled or run.
+Loading a profile never executes its scripts.
 
 Host scripts and application connectors are intentionally separate. A host
 script can run as an Input Bridge action, while a Maya action is sent to code

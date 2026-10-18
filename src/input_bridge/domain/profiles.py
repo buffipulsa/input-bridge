@@ -12,12 +12,17 @@ PROFILE_SCHEMA_VERSION = 1
 
 @dataclass
 class ScriptDefinition:
-    """Store a user-authored script without executing it."""
+    """Describe a user-authored script without executing it.
+
+    ``source`` remains supported for embedded legacy scripts. New profiles can
+    reference a file relative to the configured user codebase with ``path``.
+    """
 
     script_id: str
     name: str
-    source: str
+    source: str = ""
     language: str = "python"
+    path: str | None = None
 
 
 @dataclass

@@ -2,8 +2,10 @@ Profile format
 ==============
 
 Input Bridge profiles are portable, versioned JSON documents containing layer
-data, control bindings, user-authored scripts, and optional application
-connector references.
+data, control bindings, user-authored scripts or relative script references,
+and optional application connector references. External script paths are
+resolved relative to the user-selected codebase directory; absolute paths and
+paths that escape that directory are rejected.
 
 The detailed schema and example are available as a downloadable Markdown
 document:

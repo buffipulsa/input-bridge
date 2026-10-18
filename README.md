@@ -45,8 +45,8 @@ Working:
 - Layer-aware profile resolution with Global fallback behavior.
 - Host-side layer navigation using `K1-CW`, `K1-CCW`, and `K2-PRESS` when
   those controls are not assigned in a profile.
-- Python script definitions stored in profiles and executed only through an
-  explicit execution path.
+- Python script definitions referenced by profiles and executed only through
+  an explicit execution path.
 - Dry Run and Execute Actions runtime modes.
 - Background action execution, emergency stop, and in-memory execution
   history.
@@ -74,8 +74,9 @@ change on `main`.
 ## Current UI
 
 The current PySide6 editor provides a visual layer editor, physical-control
-layout, assignment inspector, script editor, runtime controls, and execution
-history.
+layout, profile import/export, runtime controls, and execution history. User
+scripts are maintained in the configured external codebase with a preferred
+Python IDE.
 
 ![Input Bridge layer editor](docs/images/ui-current-state.png)
 
@@ -154,8 +155,9 @@ selecting the runtime active layer, testing actions, and saving profiles.
 
 ## Profiles and scripts
 
-Profiles contain layer definitions, bindings, and Python source text. The UI
-saves profiles under:
+Profiles contain layer definitions, bindings, and references to user-authored
+Python scripts. Existing profiles may still contain embedded source text. The
+UI saves profiles under:
 
 ```text
 %LOCALAPPDATA%\Input Bridge\profiles
@@ -166,8 +168,8 @@ For example, a `Maya/Modeling` binding overrides a `Maya` binding, which
 overrides a Global binding for the same control and trigger.
 
 The project intentionally keeps action execution separate from the device.
-The device is used as an input source; scripts and host actions remain in the
-profile and run on the computer.
+The device is used as an input source; profiles reference user-authored code
+that runs on the computer. Legacy profiles may still embed script source.
 
 ## Integrations
 

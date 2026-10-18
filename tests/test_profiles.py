@@ -1,10 +1,13 @@
 """Tests for portable profile documents."""
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from input_bridge.application.actions import (
     describe_profile_action,
     find_profile_binding,
+    resolve_script_source,
 )
 from input_bridge.domain.profiles import (
     BindingDefinition,
@@ -63,6 +66,34 @@ class ProfileDocumentTests(unittest.TestCase):
         loaded = ProfileDocument.from_dict(profile.to_dict())
 
         self.assertIsNone(loaded.bindings[0].command_name)
+
+    def test_external_script_source_resolves_from_codebase(self) -> None:
+        with TemporaryDirectory(dir=".") as directory:
+            codebase = Path(directory)
+            script_path = codebase / "spotify" / "controls.py"
+            script_path.parent.mkdir()
+            script_path.write_text("print('hello')\n", encoding="utf-8")
+            script = ScriptDefinition(
+                script_id="spotify_controls",
+                name="Spotify Controls",
+                path="spotify/controls.py",
+            )
+
+            self.assertEqual(
+                resolve_script_source(script, codebase),
+                "print('hello')\n",
+            )
+
+    def test_external_script_path_cannot_escape_codebase(self) -> None:
+        with self.assertRaisesRegex(ValueError, "escapes"):
+            resolve_script_source(
+                ScriptDefinition(
+                    script_id="escape",
+                    name="Escape",
+                    path="../outside.py",
+                ),
+                Path("C:/InputBridge/code"),
+            )
 
     def test_missing_or_unknown_schema_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "schema version"):

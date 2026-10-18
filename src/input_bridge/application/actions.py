@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from ..domain.profiles import BindingDefinition, ProfileDocument
 
@@ -23,6 +24,45 @@ WINDOW_EXECUTABLES = {
     "open_notepad": ("notepad.exe",),
     "open_terminal": ("wt.exe",),
 }
+
+
+def default_codebase_directory() -> Path:
+    """Return the default user-owned directory for external scripts."""
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    base_directory = (
+        Path(local_app_data)
+        if local_app_data
+        else Path.home() / "AppData" / "Local"
+    )
+    return base_directory / "InputBridge" / "code"
+
+
+def resolve_script_source(
+    script: object,
+    codebase_root: Path | None = None,
+) -> str:
+    """Return embedded or validated external source for a script definition."""
+
+    path = getattr(script, "path", None)
+    if not path:
+        source = getattr(script, "source", "")
+        if not source:
+            raise LookupError("script has no embedded source or external path")
+        return source
+
+    relative_path = Path(path)
+    if relative_path.is_absolute():
+        raise ValueError("external script paths must be relative to the codebase")
+    root = (codebase_root or default_codebase_directory()).expanduser().resolve()
+    candidate = (root / relative_path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as error:
+        raise ValueError("external script path escapes the configured codebase") from error
+    if candidate.suffix.lower() != ".py":
+        raise ValueError("external script paths must point to a .py file")
+    return candidate.read_text(encoding="utf-8")
 
 
 def find_profile_binding(
@@ -117,6 +157,7 @@ def execute_profile_action(
     profile: ProfileDocument,
     trigger: str = "press",
     active_layer_path: Sequence[str] = (),
+    codebase_root: Path | None = None,
 ) -> None:
     """Execute the script bound to one logical event in a profile.
 
@@ -128,11 +169,13 @@ def execute_profile_action(
     logical_event : str
         Stable logical control identifier emitted by the event normalizer.
     profile : ProfileDocument
-        Profile containing the binding and script source.
+        Profile containing the binding and script definition.
     trigger : str, default="press"
         Trigger type to match.
     active_layer_path : Sequence[str], optional
         Active layer path used to select the most specific binding.
+    codebase_root : pathlib.Path, optional
+        User-selected root for external script files.
 
     Raises
     ------
@@ -171,11 +214,12 @@ def execute_profile_action(
     if script is None:
         raise LookupError(f"script {binding.script_id!r} was not found")
 
+    source = resolve_script_source(script, codebase_root)
     environment = os.environ.copy()
     environment["INPUT_BRIDGE_ACTION_ID"] = binding.action_id
     environment["INPUT_BRIDGE_CONTROL"] = logical_event
     completed = subprocess.run(
-        [sys.executable, "-c", script.source],
+        [sys.executable, "-c", source],
         shell=False,
         env=environment,
         capture_output=True,
