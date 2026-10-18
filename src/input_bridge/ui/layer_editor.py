@@ -11,7 +11,7 @@ from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QSettings, Qt, Signal
+from PySide6.QtCore import QObject, QPoint, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -177,6 +177,7 @@ class LayerEditor(QMainWindow):
 
         self.layer_service = layer_service or LayerService(InMemoryLayerBackend())
         self.selected_control_name: str | None = None
+        self.triggered_control_name: str | None = None
         self.editing_layer_path: tuple[str, ...] = ()
         self.ui_assignments: dict[tuple[tuple[str, ...], str], str] = {}
         self.ui_command_names: dict[tuple[tuple[str, ...], str], str] = {}
@@ -190,6 +191,10 @@ class LayerEditor(QMainWindow):
         self.action_execution_bridge.result_received.connect(
             self.action_execution_finished
         )
+        self.triggered_control_timer = QTimer(self)
+        self.triggered_control_timer.setSingleShot(True)
+        self.triggered_control_timer.setInterval(450)
+        self.triggered_control_timer.timeout.connect(self.clear_triggered_control)
         self.action_executor = _BackgroundActionExecutor(self.action_execution_bridge)
         self.runtime = ProfileRuntime(
             self.profile,
@@ -512,6 +517,7 @@ class LayerEditor(QMainWindow):
     ) -> None:
         """Display the latest event and dry-run action description."""
 
+        self.show_triggered_control(event.control)
         self.sync_profile_bindings()
         active_layer_path = tuple(self.active_layer_path())
         if self.handle_builtin_layer_action(event, active_layer_path):
@@ -1011,16 +1017,32 @@ class LayerEditor(QMainWindow):
             )
 
     def refresh_control_highlight(self) -> None:
-        """Highlight the currently selected control with a blue border."""
+        """Highlight selected and recently triggered controls."""
 
         for control, button in self.control_buttons.items():
-            if control == self.selected_control_name:
+            if control in {
+                self.selected_control_name,
+                self.triggered_control_name,
+            }:
                 button.setStyleSheet(
                     "QPushButton { border: 2px solid #3b82f6; "
                     "border-radius: 8px; }"
                 )
             else:
                 button.setStyleSheet("")
+
+    def show_triggered_control(self, control: str) -> None:
+        """Temporarily outline the control that generated a runtime event."""
+
+        self.triggered_control_name = control
+        self.refresh_control_highlight()
+        self.triggered_control_timer.start()
+
+    def clear_triggered_control(self) -> None:
+        """Clear the transient runtime-trigger highlight."""
+
+        self.triggered_control_name = None
+        self.refresh_control_highlight()
 
     def refresh_tree(self) -> None:
         """Show the direct children of the current layer view."""
