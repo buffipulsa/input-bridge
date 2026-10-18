@@ -47,6 +47,9 @@ Working:
   those controls are not assigned in a profile.
 - Python script definitions referenced by profiles and executed only through
   an explicit execution path.
+- Configurable layer notifications that show the active layer and submitted
+  command, plus a brief blue outline on the triggered control when the editor
+  is not focused.
 - Dry Run and Execute Actions runtime modes.
 - Background action execution, emergency stop, and in-memory execution
   history.
@@ -140,7 +143,7 @@ explicitly opt-in:
 ```powershell
 uv run observe-raw-input "profile-test" `
   --seconds 5 `
-  --profile "$env:LOCALAPPDATA\Input Bridge\profiles\example.json" `
+  --profile "$env:LOCALAPPDATA\InputBridge\profiles\example.json" `
   --execute-actions
 ```
 
@@ -150,8 +153,9 @@ Start the graphical layer editor:
 uv run layer-editor
 ```
 
-The editor supports creating layers, entering sublayers, assigning scripts,
-selecting the runtime active layer, testing actions, and saving profiles.
+The editor supports creating layers, entering sublayers, importing and
+exporting profiles, selecting the runtime active layer, simulating selected
+controls, and managing runtime execution.
 
 ## Profiles and scripts
 
@@ -160,8 +164,19 @@ Python scripts. Existing profiles may still contain embedded source text. The
 UI saves profiles under:
 
 ```text
-%LOCALAPPDATA%\Input Bridge\profiles
+%LOCALAPPDATA%\InputBridge\profiles
 ```
+
+User-authored Python files are kept outside profile JSON files. Configure the
+codebase directory in Preferences; the default is:
+
+```text
+%LOCALAPPDATA%\InputBridge\code
+```
+
+Use a preferred Python IDE to edit external scripts. The repository includes a
+generic template at `examples/code/template/controls.py` and an optional
+Spotify example at `examples/code/spotify/controls.py`.
 
 Bindings are resolved from the most specific active layer outward to Global.
 For example, a `Maya/Modeling` binding overrides a `Maya` binding, which

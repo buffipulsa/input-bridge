@@ -61,7 +61,7 @@ class ProfileDocument:
     bindings : list[BindingDefinition], optional
         Control-to-action assignments.
     scripts : list[ScriptDefinition], optional
-        User-authored scripts included in the profile.
+        User-authored script definitions, usually referencing external files.
     connectors : list[ConnectorDefinition], optional
         Optional application-specific bridge metadata.
     """
