@@ -8,6 +8,7 @@ the selected control through ``INPUT_BRIDGE_CONTROL``.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ SECRETS_FOLDER_NAME = "secrets"
 CLIENT_ID_FILENAME = "spotify-client-id.txt"
 PKCE_CACHE_FILENAME = "spotify-pkce-cache"
 VOLUME_STEP = 10
+PREVIOUS_TRACK_CHECK_DELAY_SECONDS = 0.25
 REPEAT_STATES = ("off", "context", "track")
 
 CONTROL_ACTIONS = {
@@ -135,6 +137,34 @@ def change_volume(spotify: spotipy.Spotify, playback: dict[str, Any], action: st
     spotify.volume(max(0, min(100, current + delta)))
 
 
+def previous_track_or_restart(
+    spotify: spotipy.Spotify,
+    playback: dict[str, Any],
+) -> None:
+    """Skip back or restart the current track when no previous item exists."""
+
+    playback_actions = playback.get("actions") or {}
+    if playback_actions.get("skipping_prev") is False:
+        spotify.seek_track(0)
+        return
+
+    current_item = playback.get("item") or {}
+    current_uri = current_item.get("uri")
+    try:
+        spotify.previous_track()
+    except spotipy.SpotifyException:
+        spotify.seek_track(0)
+        return
+
+    if not current_uri:
+        return
+    time.sleep(PREVIOUS_TRACK_CHECK_DELAY_SECONDS)
+    updated_playback = spotify.current_playback()
+    updated_item = (updated_playback or {}).get("item") or {}
+    if updated_item.get("uri") == current_uri:
+        spotify.seek_track(0)
+
+
 def execute_action(spotify: spotipy.Spotify, action: str) -> None:
     """Execute one mapped Spotify action."""
 
@@ -149,7 +179,7 @@ def execute_action(spotify: spotipy.Spotify, action: str) -> None:
     if playback is None:
         raise RuntimeError("Spotify has no active playback device; press Play/Pause first")
     if action == "spotify_previous":
-        spotify.previous_track()
+        previous_track_or_restart(spotify, playback)
     elif action == "spotify_next":
         spotify.next_track()
     elif action in {"spotify_volume_down", "spotify_volume_up"}:

@@ -55,7 +55,7 @@ variable is required.
 | Control | Command |
 | --- | --- |
 | R1C1 | Open Spotify |
-| R1C2 | Previous track |
+| R1C2 | Previous track, or restart current track when no previous track exists |
 | R1C3 | Play/Pause |
 | R1C4 | Next track |
 | R2C1 | Shuffle |
